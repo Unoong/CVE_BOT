@@ -1,0 +1,26 @@
+{
+  "parallel_processing": {
+    "enabled": false,
+    "max_workers": 1,
+    "comment": "병렬 처리를 비활성화하여 1개씩 순차 처리합니다"
+  },
+  "api_limits": {
+    "requests_per_minute": 60,
+    "min_request_interval_seconds": 1.5,
+    "timeout_seconds": 300,
+    "comment": "LLM API는 분당 60개 요청 제한이 있습니다"
+  },
+  "retry": {
+    "max_retries": 1,
+    "retry_delay_seconds": 2,
+    "comment": "일시적 오류 시 재시도 설정"
+  },
+  "poc_limits": {
+    "max_folder_size_mb": 1.0,
+    "comment": "POC 폴더 크기 제한 (MB). 이 크기를 초과하면 AI 분석을 건너뜁니다"
+  }
+}
+
+
+
+

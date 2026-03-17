@@ -1,0 +1,22 @@
+# Caddy 인증서 경로 (Windows)
+
+## 기본 데이터 디렉터리
+%APPDATA%\Caddy
+→ C:\Users\<사용자명>\AppData\Roaming\Caddy
+
+## Let's Encrypt (www.ds-aiplatform.com)
+%APPDATA%\Caddy\certificates\acme-v02.api.letsencrypt.org-directory\www.ds-aiplatform.com\
+  - www.ds-aiplatform.com.crt   인증서
+  - www.ds-aiplatform.com.key   개인키
+  - www.ds-aiplatform.com.json  메타데이터
+
+## localhost (자체 서명)
+%APPDATA%\Caddy\certificates\local\localhost\
+
+## ACME 계정
+%APPDATA%\Caddy\acme\acme-v02.api.letsencrypt.org-directory\
+
+## 갱신
+- Caddy는 만료 30일 전 자동 갱신
+- 수동 트리거: 인증서_갱신.bat 실행 (pm2 restart caddy)
+- 월 1회 실행 권장 (작업 스케줄러 등록 가능)

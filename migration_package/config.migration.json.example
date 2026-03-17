@@ -1,0 +1,10 @@
+{
+    "_comment": "마이그레이션 전용 설정 예시. 복사 후 config.migration.json 으로 저장하고 값을 채우세요.",
+    "database": {
+        "host": "localhost",
+        "port": 3306,
+        "user": "root",
+        "password": "your_password",
+        "database": "TOTORO"
+    }
+}

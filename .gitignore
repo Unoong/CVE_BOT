@@ -1,0 +1,109 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Config files with sensitive data
+config.json
+config.test.json
+config.prod.json
+*.key
+*.pem
+*.cert
+
+# Config template files (커밋 가능)
+!config.*.example
+
+# Node modules (for web directory)
+node_modules/
+web/node_modules/
+web/client/node_modules/
+
+# Build outputs
+web/build/
+web/dist/
+web/client/build/
+web/client/dist/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS files
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# CVE data (large files)
+CVE/
+cvelistV5-main/
+
+# Gemini account files
+gemini_account/
+*.zip
+
+# Test files
+test_output/
+coverage/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+
+

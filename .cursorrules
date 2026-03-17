@@ -1,0 +1,53 @@
+# Cursor User Rules
+
+## 기본 규칙
+- Always respond in Korean
+
+## 웹 요청 디버깅 규칙
+
+웹 요청 디버깅 시 실제 접속이 필요한 경우, playwright mcp를 사용하여 실제 브라우저로 접속하여 디버깅합니다.
+
+### Playwright MCP 사용 가이드
+
+1. **실제 브라우저 접속이 필요한 경우:**
+   - 웹 요청이 실패하거나 예상과 다른 응답을 받는 경우
+   - JavaScript 렌더링이 필요한 동적 콘텐츠를 확인해야 하는 경우
+   - 실제 사용자 환경에서의 동작을 확인해야 하는 경우
+   - 네트워크 탭이나 개발자 도구를 통해 상세한 요청/응답을 확인해야 하는 경우
+
+2. **Playwright MCP 사용 방법:**
+   - `mcp_playwright_navigate` 도구를 사용하여 URL에 접속
+   - `mcp_playwright_screenshot` 도구를 사용하여 페이지 스크린샷 확인
+   - `mcp_playwright_extract_text` 도구를 사용하여 페이지 텍스트 추출
+   - `mcp_playwright_click` 또는 `mcp_playwright_fill` 도구를 사용하여 상호작용 테스트
+   - 네트워크 요청/응답을 확인하기 위해 개발자 도구 기능 활용
+
+3. **디버깅 절차:**
+   - 먼저 playwright mcp를 통해 실제 접속하여 문제 확인
+   - 네트워크 탭에서 실제 요청/응답 헤더 및 본문 확인
+   - 콘솔 에러 메시지 확인
+   - 페이지 소스와 렌더링된 DOM 비교
+   - 문제 원인 파악 후 코드 수정
+
+4. **주의사항:**
+   - 실제 접속 시 인증이 필요한 경우 적절한 인증 정보 제공
+   - 민감한 정보가 포함된 스크린샷은 주의하여 처리
+   - 요청 제한이나 Rate Limiting을 고려하여 접속
+
+## GitHub 형상관리 규칙
+
+코드 변경 시 GitHub에 자동 commit 및 push 수행.
+
+### 규칙
+1. **코드 수정 완료 시**: 변경된 파일을 `git add` 후 `git commit -m "메시지"` 실행
+2. **Commit 메시지**: 변경 내용을 간결히 요약 (예: `feat: Gemini quota 오늘 사용 표시 로직 수정`)
+3. **Push**: `git push` 실행 (config.json의 github.token 사용, remote에 토큰 인증 설정 필요 시 `https://<token>@github.com/owner/repo.git` 형식 사용)
+4. **실행 시점**: 사용자 요청에 따른 코드 수정이 완료된 직후
+5. **제외**: config.json, .env 등 민감 정보 파일은 .gitignore에 포함되어 commit 제외
+
+### 토큰 설정
+- config.json의 `github.token` 또는 `github.tokens[0]` 사용
+- Git remote URL에 토큰 포함 시: `git remote set-url origin https://<token>@github.com/<owner>/<repo>.git`
+
+
+

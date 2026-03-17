@@ -1,0 +1,25 @@
+# CVE Bot 취약점관리서버 - 포트 3000
+# localhost: 자체 서명 / www.ds-aiplatform.com: Let's Encrypt (ACME HTTP-01, 포트 80)
+#
+# 사전 요구: www.ds-aiplatform.com DNS → 이 서버 IP, 방화벽 80/3000 허용
+
+www.ds-aiplatform.com:3000, localhost:3000 {
+    bind 0.0.0.0
+    log {
+        output file c:\aiserver\CVE_BOT\logs\caddy.log
+        format json
+    }
+
+    handle /api/* {
+        reverse_proxy localhost:32577
+    }
+    handle /uploads/* {
+        reverse_proxy localhost:32577
+    }
+    handle /socket.io/* {
+        reverse_proxy localhost:32577
+    }
+    handle {
+        reverse_proxy localhost:3001
+    }
+}

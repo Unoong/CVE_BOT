@@ -1,0 +1,17 @@
+# CVE_BOT 프로젝트 Python 의존성
+# 설치: pip install -r requirements.txt
+
+# HTTP 요청 (github_collector, circl_cve_collector, cve_api_collector, file_manager 등)
+requests>=2.31.0
+
+# MySQL 데이터베이스 연결 (db_manager, cve_api_collector, migration 등)
+mysql-connector-python>=8.2.0
+
+# 번역 (translator - CVE 설명 한글 변환)
+deep-translator>=1.11.0
+
+# HTTP 클라이언트 (cve_api_collector, test_cve_collector)
+urllib3>=2.0.0
+
+# 진행률 표시 (test/test.py)
+tqdm>=4.65.0
