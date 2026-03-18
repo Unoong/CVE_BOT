@@ -100,7 +100,7 @@ def load_exhausted_accounts_from_db():
         return set()
     
     try:
-        cursor = db.cursor(dictionary=True)
+        cursor = _db_conn.cursor(dictionary=True)
         today = datetime.now(timezone(timedelta(hours=9))).date()
         
         cursor.execute('''
@@ -284,7 +284,7 @@ def mark_account_exhausted_by_email(account_email):
         return False
     
     try:
-        cursor = db.cursor(dictionary=True)
+        cursor = _db_conn.cursor(dictionary=True)
         
         # 계정 ID 조회 (account_email 또는 account_name으로)
         cursor.execute("""

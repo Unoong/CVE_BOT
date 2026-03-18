@@ -365,9 +365,10 @@ def update_dashboard_stats(conn):
 
 
 def load_config():
-    """설정 파일 로드"""
+    """설정 파일 로드 (DB 설정 포함 - config.json)"""
     try:
-        with open('config.json', 'r', encoding='utf-8') as f:
+        config_path = Path(__file__).resolve().parent / 'config.json'
+        with open(config_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
         logger.error(f"[설정] 설정 파일 로드 실패: {e}")
@@ -405,18 +406,16 @@ def process_one_cve_thread_safe(cve_data, current_account_index, config, task_nu
     try:
         # 다운로드 경로 확인
         if download_path == "다운로드 실패" or not download_path:
-            logger.warning(f"[Task #{task_num}] ⏭️  건너뜀: {cve_code} (다운로드 실패)")
+            logger.warning(f"[Task #{task_num}] ⏭️  건너뜀: {cve_code} (다운로드 실패) - AI_chk 유지하여 재시도 가능")
             with thread_lock:
-                update_ai_check_status(conn, link, 'Y')
                 log_quota_event(current_account_index, 'failed', cve_code, link, '다운로드 실패', conn=conn)
             return ('failed', cve_code, link)
 
         # 경로 존재 확인
         path = Path(download_path)
         if not path.exists():
-            logger.warning(f"[Task #{task_num}] ⏭️  건너뜀: {cve_code} (경로 없음)")
+            logger.warning(f"[Task #{task_num}] ⏭️  건너뜀: {cve_code} (경로 없음) - AI_chk 유지하여 재시도 가능")
             with thread_lock:
-                update_ai_check_status(conn, link, 'Y')
                 log_quota_event(current_account_index, 'failed', cve_code, link, '경로 없음', conn=conn)
             return ('failed', cve_code, link)
 
@@ -425,7 +424,7 @@ def process_one_cve_thread_safe(cve_data, current_account_index, config, task_nu
             folder_size = sum(f.stat().st_size for f in path.rglob('*') if f.is_file())
             folder_size_mb = folder_size / (1024 * 1024)  # MB 단위로 변환
             
-            if folder_size_mb > MAX_POC_SIZE_MB:  # 설정값 초과
+            if folder_size_mb > MAX_POC_SIZE_MB:  # 설정값 초과 - 재시도 불가(용량 고정)이므로 AI_chk='Y' 처리
                 logger.warning(f"[Task #{task_num}] ⏭️  건너뜀: {cve_code} (POC 용량 초과: {folder_size_mb:.2f}MB > {MAX_POC_SIZE_MB}MB)")
                 with thread_lock:
                     update_ai_check_status(conn, link, 'Y')
@@ -479,6 +478,8 @@ def process_one_cve_thread_safe(cve_data, current_account_index, config, task_nu
                 # 계정이 교체된 경우
                 logger.info(f"[Task #{task_num}] 🔄 계정 교체 완료: {current_account} -> {new_account}")
                 current_account = new_account
+                # gemini-quota 패널 '오늘 사용' 즉시 반영
+                write_current_running_account(new_account)
                 # 계정 교체 후 재시도 없음 (다음 CVE 처리)
                 return ('quota_exceeded_skip', cve_code, link)
             elif new_account == current_account:
@@ -606,11 +607,25 @@ def run_analysis_cycle(current_account_index):
         # 테이블 생성
         create_ai_analysis_table(conn)
 
+        # 대시보드 통계 선반영 (캐시와 실제 DB 동기화)
+        update_dashboard_stats(conn)
+
         # 미분석 CVE 조회
         unanalyzed_cves = get_unanalyzed_cves(conn)
 
         if not unanalyzed_cves:
-            logger.info("[완료] 분석할 CVE가 없습니다.")
+            # 진단: 대시보드와 동일한 쿼리로 실제 건수 확인
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) as cnt FROM Github_CVE_Info WHERE AI_chk = 'N'")
+                raw_count = cursor.fetchone()[0]
+                cursor.close()
+                if raw_count > 0:
+                    logger.warning(f"[진단] AI_chk='N' 실제 건수: {raw_count}건 (get_unanalyzed_cves는 0건 반환 - DB/쿼리 불일치 가능)")
+                else:
+                    logger.info("[완료] 분석할 CVE가 없습니다.")
+            except Exception as e:
+                logger.info("[완료] 분석할 CVE가 없습니다.")
             return False, False, current_account_index
 
         logger.info(f"[발견] {len(unanalyzed_cves)}개의 미분석 CVE 발견")
@@ -757,6 +772,9 @@ def main():
 
                 # 분석 실행
                 quota_exceeded, all_exhausted, new_account_index = run_analysis_cycle(current_account_index)
+
+                # 계정 전환 시 현재 계정 파일 갱신 (429로 워커에서 전환된 경우 gemini-quota '오늘 사용' 반영)
+                write_current_running_account(get_current_account_email())
 
                 # 계정 인덱스 업데이트
                 if new_account_index != current_account_index:

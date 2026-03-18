@@ -1130,6 +1130,16 @@ app.get('/api/dashboard/stats', async (req, res) => {
             });
         }
         
+        // pending_pocs는 실시간 조회 (run_ai_analysis와 동기화 - 캐시 stale 방지)
+        try {
+            const [[row]] = await pool.query(
+                "SELECT COUNT(*) as pending_pocs FROM Github_CVE_Info WHERE AI_chk = 'N'"
+            );
+            basicStats.pending_pocs = Number(row?.pending_pocs ?? basicStats.pending_pocs);
+        } catch (e) {
+            logger.warn('[대시보드] pending_pocs 실시간 조회 실패, 캐시값 사용:', e.message);
+        }
+        
         // 집계 날짜를 문자열로 변환 (Date 객체인 경우 처리)
         const statDate = basicStats.stat_date instanceof Date 
             ? basicStats.stat_date.toISOString().split('T')[0] 
@@ -4118,6 +4128,25 @@ app.get('/api/gemini/quota/today', authenticateToken, checkRole(['admin']), asyn
         const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
         console.log('[AI 할당량 API] 조회 날짜:', today);
         
+        // gemini_quota_events에서 오늘(KST) 집계 - 전체=COUNT(*), success 외는 모두 failed로 집계
+        const conn = await pool.getConnection();
+        let eventsTotalReq = 0, eventsTotalSucc = 0, eventsTotalFail = 0;
+        try {
+            await conn.query("SET time_zone = '+09:00'");
+            const [evToday] = await conn.query(`
+                SELECT 
+                    COUNT(*) as req,
+                    SUM(CASE WHEN gqe.event_type = 'success' THEN 1 ELSE 0 END) as succ
+                FROM gemini_quota_events gqe
+                WHERE DATE(gqe.created_at) = ?
+            `, [today]);
+            eventsTotalReq = Number(evToday[0]?.req || 0);
+            eventsTotalSucc = Number(evToday[0]?.succ || 0);
+            eventsTotalFail = eventsTotalReq - eventsTotalSucc;
+        } finally {
+            conn.release();
+        }
+        
         // gemini_quota_usage 테이블에서 계정별 현황 조회
         const [quotaUsage] = await pool.query(`
             SELECT 
@@ -4161,52 +4190,47 @@ app.get('/api/gemini/quota/today', authenticateToken, checkRole(['admin']), asyn
             success_count: acc.success_count,
             failed_count: acc.failed_count,
             is_quota_exceeded: acc.quota_exceeded_count,
-            quota_exceeded_at: acc.last_429_error_time,
-            last_used_at: acc.last_used_at,
+            quota_exceeded_at: acc.last_429_error_time ? toKstDateTimeString(acc.last_429_error_time) : null,
+            last_used_at: acc.last_used_at ? toKstDateTimeString(acc.last_used_at) : null,
             usage_rate: acc.daily_analysis_count > 0 
                 ? ((acc.daily_analysis_count / (acc.daily_quota_limit || 1500)) * 100).toFixed(1) 
                 : 0,
             remaining: (acc.daily_quota_limit || 1500) - acc.daily_analysis_count
         }));
         
-        // 전체 통계
+        // 전체 통계 - gemini_quota_events 기반 (이벤트 로그와 동일한 수치)
         let totalQuotaLimit = accountsWithUsage.reduce((sum, acc) => sum + (acc.daily_quota_limit || 1500), 0);
-        let totalRequests = accountsWithUsage.reduce((sum, acc) => sum + acc.request_count, 0);
-        let totalSuccess = accountsWithUsage.reduce((sum, acc) => sum + acc.success_count, 0);
-        let totalFailed = accountsWithUsage.reduce((sum, acc) => sum + acc.failed_count, 0);
+        const totalRequests = eventsTotalReq;
+        const totalSuccess = eventsTotalSucc;
+        const totalFailed = eventsTotalFail;
         
-        // Fallback: usage가 0인데 오늘 이벤트가 있으면 events에서 집계 (날짜 불일치 등으로 usage 미반영 시)
-        if (totalRequests === 0) {
-            const [evByAccount] = await pool.query(`
+        // 계정별 수치도 events에서 집계 (이벤트 로그와 일치) - KST 세션 유지
+        const conn2 = await pool.getConnection();
+        let evByAccount = [];
+        try {
+            await conn2.query("SET time_zone = '+09:00'");
+            [evByAccount] = await conn2.query(`
                 SELECT 
                     ga.id, ga.account_name,
                     COUNT(*) as req,
-                    SUM(CASE WHEN gqe.event_type = 'success' THEN 1 ELSE 0 END) as succ,
-                    SUM(CASE WHEN gqe.event_type = 'failed' THEN 1 ELSE 0 END) as fail
+                    SUM(CASE WHEN gqe.event_type = 'success' THEN 1 ELSE 0 END) as succ
                 FROM gemini_quota_events gqe
                 JOIN gemini_accounts ga ON gqe.account_id = ga.id
                 WHERE DATE(gqe.created_at) = ?
                 GROUP BY ga.id, ga.account_name
             `, [today]);
-            const evReq = evByAccount.reduce((s, r) => s + Number(r.req || 0), 0);
-            if (evReq > 0) {
-                totalRequests = evReq;
-                totalSuccess = evByAccount.reduce((s, r) => s + Number(r.succ || 0), 0);
-                totalFailed = evByAccount.reduce((s, r) => s + Number(r.fail || 0), 0);
-                const byAccountName = Object.fromEntries(evByAccount.map(r => [r.account_name, r]));
-                accountsWithUsage.forEach(acc => {
-                    const match = byAccountName[acc.account_email] || evByAccount.find(e => e.account_name === acc.account_email);
-                    if (match) {
-                        acc.request_count = Number(match.req || 0);
-                        acc.success_count = Number(match.succ || 0);
-                        acc.failed_count = Number(match.fail || 0);
-                        acc.usage_rate = (acc.daily_quota_limit || 1500) > 0 ? ((acc.request_count / (acc.daily_quota_limit || 1500)) * 100).toFixed(1) : 0;
-                        acc.remaining = (acc.daily_quota_limit || 1500) - acc.request_count;
-                    }
-                });
-                logger.info(`[AI 할당량] usage 비어있음, events에서 집계: 요청 ${totalRequests}, 성공 ${totalSuccess}, 실패 ${totalFailed}`);
-            }
+        } finally {
+            conn2.release();
         }
+        const byAccountName = Object.fromEntries(evByAccount.map(r => [r.account_name, r]));
+        accountsWithUsage.forEach(acc => {
+            const match = byAccountName[acc.account_email] || evByAccount.find(e => e.account_name === acc.account_email);
+            acc.request_count = match ? Number(match.req || 0) : 0;
+            acc.success_count = match ? Number(match.succ || 0) : 0;
+            acc.failed_count = acc.request_count - acc.success_count;
+            acc.usage_rate = (acc.daily_quota_limit || 1500) > 0 ? ((acc.request_count / (acc.daily_quota_limit || 1500)) * 100).toFixed(1) : 0;
+            acc.remaining = (acc.daily_quota_limit || 1500) - acc.request_count;
+        });
         
         const totalRemaining = totalQuotaLimit - totalRequests;
         const exhaustedCount = accountsWithUsage.filter(acc => acc.is_quota_exceeded).length;
