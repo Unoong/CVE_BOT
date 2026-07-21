@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>사내망 연동 보안통제 현황 조사 - CVE_BOT</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --line-strong: #d1d5db;
+    --danger: #b91c1c;
+    --danger-bg: #fef2f2;
+    --warn: #b45309;
+    --warn-bg: #fffbeb;
+    --ok: #15803d;
+    --ok-bg: #f0fdf4;
+    --info: #1d4ed8;
+    --chip-bg: #f3f4f6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #f5f6f8;
+    color: var(--fg);
+    font-family: "Malgun Gothic", "맑은 고딕", "Segoe UI", system-ui, sans-serif;
+    line-height: 1.6;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 24px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 32px 0 12px; padding-bottom: 6px; border-bottom: 2px solid var(--line-strong); }
+  h3 { font-size: 15px; margin: 18px 0 8px; }
+  p { margin: 6px 0; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .callout {
+    border: 1px solid var(--danger);
+    background: var(--danger-bg);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin: 18px 0;
+  }
+  .callout .t { font-weight: 700; color: var(--danger); margin-bottom: 4px; }
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin: 18px 0; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 12px; text-align: center; background: #fff; }
+  .stat .v { font-size: 24px; font-weight: 700; }
+  .stat .l { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .stat.ok .v { color: var(--ok); }
+  .stat.warn .v { color: var(--warn); }
+  .stat.danger .v { color: var(--danger); }
+  .stat.info .v { color: var(--info); }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 4px; background: #fff; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f9fafb; font-weight: 700; }
+  tbody tr:nth-child(even) { background: #fcfcfd; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .b-ok { color: var(--ok); background: var(--ok-bg); border: 1px solid #bbf7d0; }
+  .b-part { color: var(--warn); background: var(--warn-bg); border: 1px solid #fde68a; }
+  .b-no { color: var(--danger); background: var(--danger-bg); border: 1px solid #fecaca; }
+  .b-unknown { color: var(--info); background: #eff6ff; border: 1px solid #bfdbfe; }
+  .finding { border: 1px solid var(--line); border-radius: 8px; margin: 10px 0; overflow: hidden; background: #fff; }
+  .finding > .head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; background: #f9fafb; border-bottom: 1px solid var(--line); }
+  .finding > .head .title { font-weight: 700; font-size: 14px; }
+  .finding > .body { padding: 12px 14px; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 6px 12px; }
+  .kv .k { font-weight: 700; color: #374151; font-size: 13px; }
+  .kv .v { font-size: 13.5px; }
+  code { background: var(--chip-bg); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; word-break: break-all; }
+  .foot { margin-top: 28px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .toolbar { position: sticky; top: 0; background: #f5f6f8; padding: 8px 0; margin-bottom: 8px; }
+  .btn { border: 1px solid var(--line-strong); background: #fff; border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  tr.row-danger td:first-child { border-left: 3px solid var(--danger); }
+  tr.row-warn td:first-child { border-left: 3px solid var(--warn); }
+  tr.row-ok td:first-child { border-left: 3px solid var(--ok); }
+  @media print {
+    body { background: #fff; }
+    .toolbar { display: none; }
+    .wrap { max-width: none; padding: 0; }
+    .finding, .stat, table { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="toolbar"><button class="btn" onclick="window.print()">인쇄 / PDF로 저장</button></div>
+
+  <h1>사내망 연동 보안통제 현황 조사</h1>
+  <div class="sub">대상: C:\aiserver\CVE_BOT · 기준일: 2026-07-21 · 코드/문서 + Windows 호스트 읽기 전용 실측</div>
+
+  <div class="callout">
+    <div class="t">종합 판정: 현 상태로 사내망 운영 승인 기준 충족으로 보기 어려움</div>
+    <div>NTP만 OS 수준에서 충족입니다. 노출면·계정정책·앱 인증통제·보안제품·로그 보존이 핵심 미달이며, 호스트는 WORKGROUP EC2에서 관리 포트와 DB까지 전역 바인딩되어 있습니다.</div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="v">16</div><div class="l">전체 통제 항목</div></div>
+    <div class="stat ok"><div class="v">1</div><div class="l">충족</div></div>
+    <div class="stat warn"><div class="v">8</div><div class="l">부분 충족</div></div>
+    <div class="stat danger"><div class="v">7</div><div class="l">미충족</div></div>
+    <div class="stat info"><div class="v">0</div><div class="l">확인 불가</div></div>
+  </div>
+
+  <h2>우선 위험</h2>
+  <table>
+    <thead><tr><th style="width:22%">위험</th><th>현재 확인 내용</th><th style="width:18%">판단</th></tr></thead>
+    <tbody>
+      <tr class="row-danger"><td>네트워크 노출면</td><td>웹·DB·RDP·WinRM·SMB가 전역 LISTEN, Public에서 RDP/WinRM Allow</td><td>연동 전 필수</td></tr>
+      <tr class="row-danger"><td>DB 전역 바인딩</td><td>MySQL 7002/33060이 0.0.0.0 LISTEN</td><td>연동 전 필수</td></tr>
+      <tr class="row-danger"><td>계정 정책 취약</td><td>앱 4자·OS 길이0·잠금 Never·Admin 비밀번호 만료 상태</td><td>연동 전 필수</td></tr>
+      <tr class="row-danger"><td>하드코딩 비밀정보</td><td>JWT·DB·메일·외부 API 토큰이 소스/설정에 평문</td><td>연동 전 필수</td></tr>
+      <tr class="row-danger"><td>보안제품 공백</td><td>V3/SecuMS/QueryOne 없음, Defender가 C:\aiserver 제외</td><td>연동 전 필수</td></tr>
+      <tr class="row-danger"><td>로그 보존 부족</td><td>앱 단기 로테이션 + OS 이벤트 20MB 순환</td><td>연동 전 필수</td></tr>
+    </tbody>
+  </table>
+  <p class="sub">비밀값 자체는 보고서에 기재하지 않았습니다. EC2 보안그룹은 호스트 명령만으로 확인하지 못했으며, LISTEN/바인딩은 호스트 실측 기준입니다.</p>
+
+  <h2>항목별 현황</h2>
+  <div id="findings"></div>
+
+  <h2>호스트·사내망 실측 요약</h2>
+  <table>
+    <thead><tr><th style="width:24%">대상</th><th style="width:26%">현재 판정</th><th>다음 확인</th></tr></thead>
+    <tbody>
+      <tr class="row-danger"><td>도메인/AD 가입</td><td>미가입(WORKGROUP)</td><td>사내 AD/SSO 가입·계정 통합 여부</td></tr>
+      <tr class="row-danger"><td>LISTEN 포트·방화벽</td><td>80/3000/3001/32577-8/7002/3389/5985 등 전역</td><td>SG·로컬 FW에서 최소 개방으로 축소</td></tr>
+      <tr class="row-danger"><td>V3·SecuMS·QueryOne</td><td>미설치</td><td>사내 표준 에이전트 설치·콘솔 등록</td></tr>
+      <tr class="row-warn"><td>Windows 이벤트 로그</td><td>20MB Circular, 자동백업 없음</td><td>중앙 수집·장기 보존</td></tr>
+      <tr class="row-ok"><td>NTP</td><td>AWS 169.254.169.123 정상</td><td>사내 NTP 전환 필요 시 정책 확인</td></tr>
+      <tr class="row-warn"><td>자동 백업</td><td>앱 전용 스케줄 없음(대시보드 일일만)</td><td>DB/파일 백업·복구시험</td></tr>
+      <tr class="row-warn"><td>운영 형태</td><td>PM2 비서비스·AI 분석 수동 python</td><td>서비스화·부팅 복구·단일 인스턴스 정리</td></tr>
+      <tr class="row-warn"><td>TLS</td><td>Caddy ACME 의존, 호스트 인증서점 0</td><td>TLS1.2+ 강제·HTTP 차단</td></tr>
+    </tbody>
+  </table>
+
+  <h2>사내망 연동 전 증빙 묶음</h2>
+  <table>
+    <thead><tr><th style="width:8%">순서</th><th>확보할 증빙</th><th style="width:20%">판정 목적</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>보안그룹·방화벽 허용 목록과 내부 전용 포트 loopback 전환 계획</td><td>1.4, 3.2, 4.2</td></tr>
+      <tr><td>2</td><td>AD 가입 또는 개별계정 정책, 공용계정 승인 목록</td><td>2.1~2.4</td></tr>
+      <tr><td>3</td><td>역할 매트릭스와 권한 부여·회수 감사 기록</td><td>2.5, 5.1</td></tr>
+      <tr><td>4</td><td>V3·SecuMS·QueryOne 설치/정책/콘솔 등록, Defender 제외 해제</td><td>1.3</td></tr>
+      <tr><td>5</td><td>앱·OS 로그 중앙 수집과 1·2·5년 보존 정책</td><td>5.1</td></tr>
+      <tr><td>6</td><td>DB/파일 자동 백업·복구 시험, PM2/서비스화 표준</td><td>1.1, 1.3</td></tr>
+      <tr><td>7</td><td>사내 NTP 전환 여부 및 TLS 1.2+ 강제·HTTP 차단</td><td>5.2, 4.2</td></tr>
+    </tbody>
+  </table>
+
+  <div class="foot">
+    판정 원칙: 코드 존재=구현, 호스트 조회=적용, 중앙 콘솔·승인 문서=운영 증빙. 세 요소가 모두 필요한 항목은 코드만으로 완전 충족 처리하지 않았습니다.<br />
+    본 문서는 캔버스 보고서(internal-network-security-status)와 동일 내용의 독립 실행형 HTML 사본입니다.
+  </div>
+</div>
+
+<script>
+const findings = [
+  { id:"1.1", req:"운영 매뉴얼: 담당자·구성도·구동·운용·장애조치·비상연락망", status:"부분 충족",
+    current:"구성도, 구동 포트, 일상 점검, 백업·복구 예시, 장애 유형별 조치 문서는 존재한다. 호스트는 Windows Server 2022 EC2(WORKGROUP)이며 웹스택은 PM2+Caddy로 장기 가동 중이다.",
+    evidence:"migration/01_시스템_아키텍처.md; OPERATION_GUIDE.md; 호스트: EC2AMAZ-19D9ESO / PartOfDomain=False",
+    gap:"비상연락망은 ○○○/010-XXXX-XXXX 자리표시자다. PM2는 Windows 서비스·부팅 자동복구(dump.pm2)가 없어 장애 시 복구 절차가 문서와 실제 운영이 어긋난다." },
+  { id:"1.2", req:"개발 유지보수 문서: 프로그램·입출력·목록·사용자/운영자 지침", status:"부분 충족",
+    current:"아키텍처, DB 구조, API 참조, 설치·운영·마이그레이션 문서가 다수 존재한다.",
+    evidence:"README_DOCUMENTATION.md; DATABASE_STRUCTURE.md; web/API_REFERENCE.md; migration/*",
+    gap:"정식 요구사항정의서·기능정의서·프로그램 목록의 소유자/사용자 매핑은 확인되지 않는다. DB 문서 테이블 수와 실제 server.js 스키마가 불일치한다." },
+  { id:"1.3", req:"자원 감시·계정·로그·백업·SecuMS·V3·형상관리·쿼리원", status:"부분 충족",
+    current:"PM2 상태·앱 로그, Git remote, Amazon SSM Agent, Defender 실시간 보호는 확인된다. 대시보드 일일 스케줄(CVE_BOT_Dashboard_Init)만 존재한다.",
+    evidence:"ecosystem.config.js; 호스트: SSM Running, Defender 동작, Git origin 존재, V3/SecuMS/QueryOne 서비스·설치 없음",
+    gap:"V3·SecuMS·QueryOne 미설치. 앱 전용 자동 백업 스케줄 없음. Defender가 C:\\aiserver를 제외해 프로젝트 경로 탐지 공백이 있다. 이벤트 로그는 20MB 순환이다." },
+  { id:"1.4", req:"업무에 불필요한 서비스·포트 제거", status:"미충족",
+    current:"실측 LISTEN: Caddy 80/3000, Vite 3001, backend 32577/32578, MySQL 7002/33060, RDP 3389, WinRM 5985, SMB 445/139가 전역(0.0.0.0/::) 바인딩이다.",
+    evidence:"Get-NetTCPConnection 실측; Caddyfile; server.js listen 0.0.0.0; MySQL bind-address 미지정",
+    gap:"내부 포트 loopback 제한이 없다. Public 프로필에서 RDP·WinRM Allow. EC2 보안그룹은 호스트만으로 확인 불가하나, 호스트 관점 노출면은 넓다." },
+  { id:"2.1", req:"개인별 계정 부여 및 공용계정 금지", status:"부분 충족",
+    current:"앱은 username 고유·개인 가입이 있다. OS는 WORKGROUP·로컬 Administrator(RID 500) 단독 활성이다.",
+    evidence:"server.js users UNIQUE; 호스트: Enabled 사용자 Administrator만",
+    gap:"앱 기본 공용 admin 자동 생성·초기비번 노출. OS도 공용성 강한 단일 관리자 계정이다. 공용계정 승인·사용이력 점검 절차가 없다." },
+  { id:"2.2", req:"8자 복잡도·90일 만료·임시 비밀번호·초기 변경", status:"미충족",
+    current:"앱은 bcrypt 저장·최소 4자만 강제한다. OS는 PasswordComplexity=1·최대 42일이지만 최소 길이 0·이력 없음이다.",
+    evidence:"Register.jsx/server.js 최소 4자; net accounts: MinLength=0, History=None, MaxAge=42; Admin PasswordExpires 만료 상태",
+    gap:"앱·OS 모두 요구 8자·혼합·90일·초기 강제변경을 충족하지 않는다. Administrator 비밀번호는 조사일 기준 만료된 채 운용 중이다." },
+  { id:"2.3", req:"5회 연속 오류 시 즉시 잠금 및 본인확인 후 임시 비밀번호", status:"미충족",
+    current:"앱은 실패 로그만 남긴다. OS LockoutBadCount=0(Never)로 무제한 시도가 가능하다.",
+    evidence:"server.js 로그인 실패 로그만; secedit/net accounts LockoutBadCount=0",
+    gap:"앱·OS 모두 5회 잠금이 없다. 임시 비밀번호·본인확인 연계도 없다." },
+  { id:"2.4", req:"90일 장기 미사용 계정 자동 잠금", status:"미충족",
+    current:"앱은 last_login만 갱신한다. OS에도 90일 미사용 자동 잠금 정책이 확인되지 않는다.",
+    evidence:"server.js last_login UPDATE; 로컬 계정 정책에 미사용 잠금 설정 없음",
+    gap:"활성/잠금 상태와 자동 잠금 배치가 없다." },
+  { id:"2.5", req:"업무별 차등 권한 부여 및 회수", status:"부분 충족",
+    current:"앱 user/analyst/admin RBAC과 역할 변경·삭제 API가 있다. OS는 Administrators에 Administrator만 있다.",
+    evidence:"server.js checkRole·role API; Get-LocalGroupMember Administrators",
+    gap:"직급·부서 단위 권한과 권한 변경 감사 원장이 없다. 사내 AD/그룹 연동도 없다(도메인 미가입)." },
+  { id:"3.1", req:"일정 시간 미사용 시 해제 또는 재인증", status:"미충족",
+    current:"JWT 24시간 절대 만료만 있으며 유휴 타이머가 없다.",
+    evidence:"server.js expiresIn 24h; Layout.jsx 수동 로그아웃",
+    gap:"유휴 재인증 미구현. localStorage 토큰은 브라우저 종료 후에도 유지될 수 있다." },
+  { id:"3.2", req:"시스템·관리자 계정 접속 IP/MAC 통제", status:"미충족",
+    current:"앱은 req.ip 로그만 한다. RDP·WinRM·웹·DB가 전역 LISTEN이고 Public 방화벽에서 RDP/WinRM이 허용된다.",
+    evidence:"server.js req.ip; TermService 3389 NLA=1; WinRM 5985 Address=*; Public Allow 규칙",
+    gap:"앱 ACL·MAC 통제 없음. 관리 포트가 Public에서 열려 있어 사내망 연동 전 네트워크 통제가 선행되어야 한다." },
+  { id:"3.3", req:"관리자·개인정보취급자 멀티 로그인 차단", status:"미충족",
+    current:"상태비저장 JWT라 동일 계정의 동시 토큰 사용을 막지 못한다.",
+    evidence:"server.js jwt.sign / authenticateToken",
+    gap:"세션 테이블·jti 폐기·동시접속 거부가 없다." },
+  { id:"4.1", req:"저장 시 중요정보 암호화, 비밀번호 단방향 암호화", status:"부분 충족",
+    current:"앱 사용자 비밀번호는 bcrypt 단방향 해시다.",
+    evidence:"server.js bcrypt.hash/compare",
+    gap:"이메일·전화·API 토큰 평문 저장. JWT/DB/메일/외부 토큰이 소스·설정에 평문. SMB EncryptData=False." },
+  { id:"4.2", req:"개인·인증정보 전송 암호화, TLS 1.2 이상", status:"부분 충족",
+    current:"Caddy가 도메인:3000과 Let's Encrypt(HTTP-01/80)로 TLS 종단을 담당한다. 백엔드 HTTPS(32578)와 server.cert/key도 존재한다.",
+    evidence:"Caddyfile; server.js https; 호스트 LocalMachine\\My 인증서 0개; SCHANNEL TLS 강제 레지스트리 없음",
+    gap:"HTTP 32577·3001·80이 병행 LISTEN. TLS 1.2 최소 강제 설정이 없고 WinRM은 HTTPS 리스너 없이 5985만 있다." },
+  { id:"5.1", req:"업무·접속·권한·개인정보 업무 로그 및 1/2/5년 보관", status:"부분 충족",
+    current:"앱 로그인 ID/IP/시각 로그와 일부 행위 로그가 있다. OS Security/System/Application은 20MB Circular이다.",
+    evidence:"server.js 로그인 로그; logger.py backupCount=14; Get-WinEvent ListLog max 20MB retention=false",
+    gap:"수행업무·권한변경 감사 원장과 1·2·5년 보존이 없다. OS 이벤트도 소용량 순환이라 장기 보관·중앙 전송이 필요하다." },
+  { id:"5.2", req:"NTP 서버 시간 동기화", status:"충족",
+    current:"W32Time Running/Automatic, source 169.254.169.123(AWS Time Sync), Stratum 4, 조사일 동기화 정상.",
+    evidence:"w32tm /query status·source; Get-Service W32Time",
+    gap:"사내망 전용 NTP로 전환할지는 연동 설계에서 결정하면 된다. 현재 AWS 표준 동기화는 정상이다." },
+];
+
+function badgeClass(s){
+  if(s==="충족") return "b-ok";
+  if(s==="부분 충족") return "b-part";
+  if(s==="미충족") return "b-no";
+  return "b-unknown";
+}
+
+const host = document.getElementById("findings");
+host.innerHTML = findings.map(function(f){
+  return '<div class="finding">'
+    + '<div class="head"><span class="title">' + f.id + ' · ' + f.req + '</span>'
+    + '<span class="badge ' + badgeClass(f.status) + '">' + f.status + '</span></div>'
+    + '<div class="body"><div class="kv">'
+    + '<div class="k">현재 상태</div><div class="v">' + f.current + '</div>'
+    + '<div class="k">근거</div><div class="v"><code>' + f.evidence + '</code></div>'
+    + '<div class="k">부족/확인사항</div><div class="v">' + f.gap + '</div>'
+    + '</div></div></div>';
+}).join("");
+</script>
+</body>
+</html>
