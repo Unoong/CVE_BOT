@@ -10,11 +10,13 @@ const fssync = require('fs');
 const session = require('express-session');
 const nodemailer = require('nodemailer');
 const logger = require('./utils/logger');
+const { validatePasswordComplexity } = require('./utils/passwordPolicy');
 const http = require('http');
 const https = require('https');
 const { Server } = require('socket.io');
 const csvParser = require('csv-parser');
 const iconv = require('iconv-lite');
+const { execFile } = require('child_process');
 
 // 환경변수(.env) 로드 (없어도 무시됨)
 try {
@@ -70,14 +72,14 @@ const io = new Server(httpsServer || httpServer, {
 const HTTP_PORT = 32577;
 const HTTPS_PORT = 32578;
 const JWT_SECRET = 'cve-bot-secret-key-2025';
-const SITE_NAME = process.env.SITE_NAME || 'AI보안위협관리시스템';
+const SITE_NAME = process.env.SITE_NAME || '신한DS - AI보안위협관리시스템';
 
 // 이메일 전송 설정
 const emailTransporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
-        user: 'gpt8354@gmail.com',
-        pass: 'qjkeqjvurvrxyffn'  // 앱 비밀번호 (공백 제거)
+        user: 'shinhands.credit1@gmail.com',
+        pass: 'maprgimyreeqtauh'  // 앱 비밀번호 (공백 제거)
     }
 });
 
@@ -122,6 +124,32 @@ function toKstDateTimeString(val) {
     if (isNaN(d.getTime())) return null;
     const pad = n => String(n).padStart(2, '0');
     return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+}
+
+/** gemini_quota_usage 등 UTC로 저장된 DATETIME을 클라이언트용 ISO 문자열로 변환
+ *  DB가 UTC → toISOString()으로 그대로 전달. 클라이언트 formatDateTime이 KST로 표시
+ */
+function utcToIsoString(val) {
+    if (val == null) return null;
+    const d = val instanceof Date ? val : new Date(val);
+    if (isNaN(d.getTime())) return null;
+    return d.toISOString();
+}
+
+/** 로컬(서버 OS) 달력 기준 YYYY-MM-DD — toISOString(UTC)로 인한 전날/다음날 끊김 방지 */
+function formatLocalYMD(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+/** mysql2 DATE / 문자열 / Date → YYYY-MM-DD 키 */
+function rowDateToYMD(v) {
+    if (v == null) return null;
+    if (typeof v === 'string') return v.slice(0, 10);
+    if (v instanceof Date && !isNaN(v.getTime())) return formatLocalYMD(v);
+    return String(v).slice(0, 10);
 }
 
 // 파일 업로드 설정 (보안 강화)
@@ -324,11 +352,11 @@ app.post('/api/auth/send-verification', async (req, res) => {
         
         // 이메일 발송
         logger.debug('[5] 이메일 발송 시작...');
-        logger.debug('[5] 발신: gpt8354@gmail.com');
+        logger.debug('[5] 발신: shinhands.credit1@gmail.com');
         logger.debug('[5] 수신:', email);
         
         await emailTransporter.sendMail({
-            from: 'gpt8354@gmail.com',
+            from: 'shinhands.credit1@gmail.com',
             to: email,
             subject: '[CVE Bot] 이메일 인증 코드',
             html: `
@@ -446,6 +474,15 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(400).json({ error: '이미 존재하는 사용자ID입니다' });
         }
         console.log('[3] ✅ 사용자ID 사용 가능');
+
+        // 비밀번호 복잡도 검증 (영문/숫자/특수문자 혼합 8자 이상)
+        console.log('[3.5] 비밀번호 복잡도 확인 중...');
+        const pwCheck = validatePasswordComplexity(password);
+        if (!pwCheck.valid) {
+            console.log('[3.5] ❌ 비밀번호 정책 미충족:', pwCheck.error);
+            return res.status(400).json({ error: pwCheck.error });
+        }
+        console.log('[3.5] ✅ 비밀번호 정책 충족');
 
         // 비밀번호 해시
         console.log('[4] 비밀번호 암호화 중...');
@@ -613,7 +650,7 @@ app.post('/api/auth/reset-password-send-code', async (req, res) => {
 
         // 이메일 발송
         const mailOptions = {
-            from: 'gpt8354@gmail.com',
+            from: 'shinhands.credit1@gmail.com',
             to: email,
             subject: `[${SITE_NAME}] 비밀번호 재설정 인증 코드`,
             html: `
@@ -721,6 +758,12 @@ app.post('/api/auth/reset-password', async (req, res) => {
         if (stored.code !== code || stored.username !== username) {
             logger.warn('[PW 재설정] 인증 정보 불일치');
             return res.status(400).json({ error: '인증 정보가 일치하지 않습니다' });
+        }
+
+        const pwCheck = validatePasswordComplexity(newPassword);
+        if (!pwCheck.valid) {
+            logger.warn(`[PW 재설정] 비밀번호 정책 미충족: ${pwCheck.error}`);
+            return res.status(400).json({ error: pwCheck.error });
         }
 
         // 사용자 확인
@@ -1116,9 +1159,14 @@ app.get('/api/dashboard/stats', async (req, res) => {
         const startTime = Date.now();
         
         // 1. 기본 통계 (집계 테이블에서 조회 - 0.01초)
+        // 집계 시각: mysql2 timezone:'Z'는 TIMESTAMP를 '벽시계=UTC'로 잘못 읽어 서울 표시가 +9h·익일 뜸.
+        // DB 서버에서 DATE_FORMAT만 쓰면 세션(보통 SYSTEM=한국) 기준 실제 벽시계가 나옴. CONVERT_TZ(+00→+09)는 이중 +9h 되어 04:40 익일이 되므로 쓰지 않음.
         const [[basicStats]] = await pool.query(`
-            SELECT * FROM dashboard_stats_daily
-            ORDER BY stat_date DESC
+            SELECT 
+                d.*,
+                DATE_FORMAT(d.updated_at, '%Y-%m-%d %H:%i:%s') AS stats_updated_at_kst
+            FROM dashboard_stats_daily d
+            ORDER BY d.stat_date DESC
             LIMIT 1
         `);
         
@@ -1140,10 +1188,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
             logger.warn('[대시보드] pending_pocs 실시간 조회 실패, 캐시값 사용:', e.message);
         }
         
-        // 집계 날짜를 문자열로 변환 (Date 객체인 경우 처리)
-        const statDate = basicStats.stat_date instanceof Date 
-            ? basicStats.stat_date.toISOString().split('T')[0] 
-            : basicStats.stat_date;
+        const statDate = rowDateToYMD(basicStats.stat_date) || basicStats.stat_date;
         
         logger.info(`[대시보드] 집계 날짜: ${statDate}`);
         
@@ -1196,14 +1241,75 @@ app.get('/api/dashboard/stats', async (req, res) => {
                     return [];
                 }
             })(),
-            // attackStageStats
-            pool.query(`SELECT vuln_stage as attack_stage, count FROM dashboard_attack_stage_stats ORDER BY stat_date DESC, rank_order ASC LIMIT 100`).then(([r]) => r || []).catch(() => []),
-            // cweTypeStats
-            pool.query(`SELECT cwe_id as cwe_type, count FROM dashboard_cwe_stats ORDER BY stat_date DESC, rank_order ASC LIMIT 100`).then(([r]) => r || []).catch(() => []),
-            // attackTypeStats
-            pool.query(`SELECT attack_type, count FROM dashboard_attack_type_stats ORDER BY stat_date DESC, rank_order ASC LIMIT 100`).then(([r]) => r || []).catch(() => []),
-            // productStats
-            pool.query(`SELECT product, count FROM dashboard_product_stats ORDER BY stat_date DESC, rank_order ASC LIMIT 100`).then(([r]) => r || []).catch(() => []),
+            // attackStageStats — 전 테이블 ORDER BY stat_date DESC 제거: 최신 집계일만 조회 (idx_stat_date 활용)
+            (async () => {
+                try {
+                    let [r] = await pool.query(
+                        `SELECT vuln_stage as attack_stage, count FROM dashboard_attack_stage_stats WHERE stat_date = ? ORDER BY rank_order ASC LIMIT 100`,
+                        [statDate]
+                    );
+                    if (!r || r.length === 0) {
+                        [r] = await pool.query(
+                            `SELECT vuln_stage as attack_stage, count FROM dashboard_attack_stage_stats WHERE stat_date = (SELECT MAX(stat_date) FROM dashboard_attack_stage_stats) ORDER BY rank_order ASC LIMIT 100`
+                        );
+                    }
+                    return r || [];
+                } catch (e) {
+                    logger.warn('[대시보드] attackStageStats 조회 실패:', e.message);
+                    return [];
+                }
+            })(),
+            (async () => {
+                try {
+                    let [r] = await pool.query(
+                        `SELECT cwe_id as cwe_type, count FROM dashboard_cwe_stats WHERE stat_date = ? ORDER BY rank_order ASC LIMIT 100`,
+                        [statDate]
+                    );
+                    if (!r || r.length === 0) {
+                        [r] = await pool.query(
+                            `SELECT cwe_id as cwe_type, count FROM dashboard_cwe_stats WHERE stat_date = (SELECT MAX(stat_date) FROM dashboard_cwe_stats) ORDER BY rank_order ASC LIMIT 100`
+                        );
+                    }
+                    return r || [];
+                } catch (e) {
+                    logger.warn('[대시보드] cweTypeStats 조회 실패:', e.message);
+                    return [];
+                }
+            })(),
+            (async () => {
+                try {
+                    let [r] = await pool.query(
+                        `SELECT attack_type, count FROM dashboard_attack_type_stats WHERE stat_date = ? ORDER BY rank_order ASC LIMIT 100`,
+                        [statDate]
+                    );
+                    if (!r || r.length === 0) {
+                        [r] = await pool.query(
+                            `SELECT attack_type, count FROM dashboard_attack_type_stats WHERE stat_date = (SELECT MAX(stat_date) FROM dashboard_attack_type_stats) ORDER BY rank_order ASC LIMIT 100`
+                        );
+                    }
+                    return r || [];
+                } catch (e) {
+                    logger.warn('[대시보드] attackTypeStats 조회 실패:', e.message);
+                    return [];
+                }
+            })(),
+            (async () => {
+                try {
+                    let [r] = await pool.query(
+                        `SELECT product, count FROM dashboard_product_stats WHERE stat_date = ? ORDER BY rank_order ASC LIMIT 100`,
+                        [statDate]
+                    );
+                    if (!r || r.length === 0) {
+                        [r] = await pool.query(
+                            `SELECT product, count FROM dashboard_product_stats WHERE stat_date = (SELECT MAX(stat_date) FROM dashboard_product_stats) ORDER BY rank_order ASC LIMIT 100`
+                        );
+                    }
+                    return r || [];
+                } catch (e) {
+                    logger.warn('[대시보드] productStats 조회 실패:', e.message);
+                    return [];
+                }
+            })(),
             // recentCollectedCVEs (집계 없으면 원본 조회)
             (async () => {
                 const t = Date.now();
@@ -1223,7 +1329,15 @@ app.get('/api/dashboard/stats', async (req, res) => {
             (async () => {
                 const t = Date.now();
                 try {
-                    const [r] = await pool.query(`SELECT cve_code as CVE_Code, product, datePublished, cvss_score as CVSS_Score, cvss_severity as CVSS_Serverity, state FROM dashboard_latest_cves ORDER BY stat_date DESC, rank_order ASC LIMIT 10`);
+                    let [r] = await pool.query(
+                        `SELECT cve_code as CVE_Code, product, datePublished, cvss_score as CVSS_Score, cvss_severity as CVSS_Serverity, state FROM dashboard_latest_cves WHERE stat_date = ? ORDER BY rank_order ASC LIMIT 10`,
+                        [statDate]
+                    );
+                    if (!r || r.length === 0) {
+                        [r] = await pool.query(
+                            `SELECT cve_code as CVE_Code, product, datePublished, cvss_score as CVSS_Score, cvss_severity as CVSS_Serverity, state FROM dashboard_latest_cves WHERE stat_date = (SELECT MAX(stat_date) FROM dashboard_latest_cves) ORDER BY rank_order ASC LIMIT 10`
+                        );
+                    }
                     if (r && r.length > 0) { logger.info(`[대시보드] latestCVE(집계) ${Date.now() - t}ms`); return r; }
                     logger.info('[대시보드] latestCVE fallback(원본)');
                     const [d] = await pool.query(`SELECT CVE_Code, product, datePublished, CVSS_Score, CVSS_Serverity, state FROM CVE_Info WHERE datePublished IS NOT NULL ORDER BY datePublished DESC LIMIT 10`);
@@ -1257,6 +1371,15 @@ app.get('/api/dashboard/stats', async (req, res) => {
         logger.info(`[대시보드] 기본 통계 조회 완료 (${elapsed}ms) - 집계 테이블 사용`);
         // collect_time: DATETIME이면 timezone:'Z' 보정, TEXT(문자열)면 그대로
         const fixCollectTime = arr => (arr || []).map(r => ({ ...r, collect_time: r.collect_time instanceof Date ? toKstDateTimeString(r.collect_time) : r.collect_time }));
+
+        const kstStr = basicStats.stats_updated_at_kst && String(basicStats.stats_updated_at_kst).trim();
+        const statsUpdatedAtForClient = kstStr
+            ? `${kstStr.replace(' ', 'T')}+09:00`
+            : (() => {
+                const tks = toKstDateTimeString(basicStats.updated_at);
+                if (tks) return `${String(tks).replace(' ', 'T')}+09:00`;
+                return utcToIsoString(basicStats.updated_at);
+            })();
         
         res.json({
             total_cves: basicStats.total_cves,
@@ -1281,9 +1404,9 @@ app.get('/api/dashboard/stats', async (req, res) => {
                 total_daily_analysis: 0,
                 total_429_errors: 0
             },
-            // 집계 시점 정보
-            stats_updated_at: basicStats.updated_at,
-            stats_date: basicStats.stat_date
+            // 집계 시점: SQL UTC→KST 문자열(+09 ISO) 우선, 없으면 ISO UTC / toKst 폴백
+            stats_updated_at: statsUpdatedAtForClient,
+            stats_date: rowDateToYMD(basicStats.stat_date)
         });
     } catch (err) {
         logger.error('[대시보드 통계 실패]', err);
@@ -1298,60 +1421,60 @@ app.get('/api/dashboard/collection-trends', async (req, res) => {
         logger.info('[대시보드] 수집 현황 조회 시작 (최근 30일)');
         const startTime = Date.now();
         
-        // 최근 30일간의 날짜 목록 생성
+        // 최근 30일간의 날짜 목록 생성 (로컬 달력 — UTC toISOString() 사용 시 오늘 날짜가 그래프에서 빠지는 문제 방지)
         const dates = [];
         const today = new Date();
         for (let i = 29; i >= 0; i--) {
             const date = new Date(today);
             date.setDate(date.getDate() - i);
-            dates.push(date.toISOString().split('T')[0]);
+            dates.push(formatLocalYMD(date));
         }
         
-        // 일별 CVE 수집 수 (collect_time 기준) - 인덱스 활용을 위해 날짜 범위 명시
+        // 일별 CVE 수집 수 (collect_time 기준) — DATE_FORMAT으로 문자열 키 통일 (mysql2 Date+toISOString 시 하루 밀림 방지)
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        const startDate = thirtyDaysAgo.toISOString().split('T')[0];
+        const startDate = formatLocalYMD(thirtyDaysAgo);
         
         const [cveData] = await pool.query(`
             SELECT 
-                DATE(collect_time) as date,
+                DATE_FORMAT(collect_time, '%Y-%m-%d') as date,
                 COUNT(*) as count
             FROM CVE_Info
             WHERE collect_time >= ?
                 AND collect_time IS NOT NULL
-            GROUP BY DATE(collect_time)
+            GROUP BY DATE_FORMAT(collect_time, '%Y-%m-%d')
             ORDER BY date ASC
         `, [startDate]);
         
         // 일별 POC 수집 수 (collect_time 기준)
         const [pocData] = await pool.query(`
             SELECT 
-                DATE(collect_time) as date,
+                DATE_FORMAT(collect_time, '%Y-%m-%d') as date,
                 COUNT(*) as count
             FROM Github_CVE_Info
             WHERE collect_time >= ?
                 AND collect_time IS NOT NULL
-            GROUP BY DATE(collect_time)
+            GROUP BY DATE_FORMAT(collect_time, '%Y-%m-%d')
             ORDER BY date ASC
         `, [startDate]);
         
         // 일별 AI 분석 완료 수 (AI_chk = 'Y'이고 collect_time 기준)
         const [aiData] = await pool.query(`
             SELECT 
-                DATE(collect_time) as date,
+                DATE_FORMAT(collect_time, '%Y-%m-%d') as date,
                 COUNT(*) as count
             FROM Github_CVE_Info
             WHERE collect_time >= ?
                 AND collect_time IS NOT NULL
                 AND AI_chk = 'Y'
-            GROUP BY DATE(collect_time)
+            GROUP BY DATE_FORMAT(collect_time, '%Y-%m-%d')
             ORDER BY date ASC
         `, [startDate]);
         
         // 날짜별로 데이터 매핑
-        const cveMap = new Map(cveData.map(item => [item.date.toISOString().split('T')[0], item.count]));
-        const pocMap = new Map(pocData.map(item => [item.date.toISOString().split('T')[0], item.count]));
-        const aiMap = new Map(aiData.map(item => [item.date.toISOString().split('T')[0], item.count]));
+        const cveMap = new Map(cveData.map(item => [rowDateToYMD(item.date), item.count]));
+        const pocMap = new Map(pocData.map(item => [rowDateToYMD(item.date), item.count]));
+        const aiMap = new Map(aiData.map(item => [rowDateToYMD(item.date), item.count]));
         
         // 30일간의 데이터 배열 생성 (없는 날짜는 0으로)
         const trends = dates.map(date => {
@@ -2203,6 +2326,117 @@ app.post('/api/db/query', authenticateToken, checkRole(['analyst', 'admin']), as
     }
 });
 
+/** 대시보드 집계 `run_init_dashboard.bat`(또는 동일 내용의 node 실행) 단일 플라이트 */
+let dashboardRunInitDashboardInFlight = false;
+
+/** 새벽 스케줄과 동일: `web/run_init_dashboard.bat` → `node init_dashboard_stats.js` (운영자만) */
+const handleRunDashboardInitBatch = async (req, res) => {
+    if (dashboardRunInitDashboardInFlight) {
+        return res.status(429).json({
+            error: '이미 대시보드 통계 집계가 진행 중입니다. 완료 후 다시 시도하세요.'
+        });
+    }
+    const batPath = path.join(__dirname, 'run_init_dashboard.bat');
+    const jsPath = path.join(__dirname, 'init_dashboard_stats.js');
+    if (!fssync.existsSync(jsPath)) {
+        return res.status(500).json({ error: 'init_dashboard_stats.js 를 찾을 수 없습니다' });
+    }
+
+    const useBat = process.platform === 'win32' && fssync.existsSync(batPath);
+
+    dashboardRunInitDashboardInFlight = true;
+    const started = Date.now();
+    try {
+        const result = await new Promise((resolve, reject) => {
+            if (useBat) {
+                const comspec = process.env.ComSpec || 'cmd.exe';
+                execFile(
+                    comspec,
+                    ['/c', batPath],
+                    {
+                        cwd: __dirname,
+                        maxBuffer: 24 * 1024 * 1024,
+                        windowsHide: true
+                    },
+                    (err, stdout, stderr) => {
+                        if (err) {
+                            const e = new Error(err.message || 'run_init_dashboard.bat 비정상 종료');
+                            e.code = err.code;
+                            e.stdout = stdout;
+                            e.stderr = stderr;
+                            return reject(e);
+                        }
+                        resolve({ stdout, stderr, ran: batPath });
+                    }
+                );
+            } else {
+                execFile(
+                    process.execPath,
+                    [jsPath],
+                    {
+                        cwd: __dirname,
+                        maxBuffer: 24 * 1024 * 1024
+                    },
+                    (err, stdout, stderr) => {
+                        if (err) {
+                            const e = new Error(err.message || 'init_dashboard_stats.js 비정상 종료');
+                            e.code = err.code;
+                            e.stdout = stdout;
+                            e.stderr = stderr;
+                            return reject(e);
+                        }
+                        resolve({ stdout, stderr, ran: jsPath });
+                    }
+                );
+            }
+        });
+        const duration_ms = Date.now() - started;
+        const tail = (s, n = 2400) =>
+            (Buffer.isBuffer(s) ? s.toString('utf8') : String(s || '')).slice(-n);
+        logger.info(`[대시보드] run-init-batch 완료 (${duration_ms}ms) 대상=${result.ran}`);
+        res.json({
+            success: true,
+            message:
+                useBat
+                    ? 'run_init_dashboard.bat 실행 및 집계가 완료되었습니다.'
+                    : 'init_dashboard_stats.js 실행 및 집계가 완료되었습니다. (비-Windows에서는 배치와 동일 스크립트만 실행)',
+            duration_ms,
+            ran: path.basename(result.ran),
+            stdout_tail: tail(result.stdout),
+            stderr_tail: tail(result.stderr)
+        });
+    } catch (err) {
+        const duration_ms = Date.now() - started;
+        logger.error('[대시보드] run-init-batch 실패', err);
+        const tail = (s, n = 3200) =>
+            (Buffer.isBuffer(s) ? s.toString('utf8') : String(s || '')).slice(-n);
+        res.status(500).json({
+            error: '대시보드 통계 집계 실행에 실패했습니다.',
+            exitCode: err.code,
+            message: err.message,
+            duration_ms,
+            stdout_tail: tail(err.stdout),
+            stderr_tail: tail(err.stderr)
+        });
+    } finally {
+        dashboardRunInitDashboardInFlight = false;
+    }
+};
+
+app.post(
+    '/api/admin/dashboard/run-init-batch',
+    authenticateToken,
+    checkRole(['admin']),
+    handleRunDashboardInitBatch
+);
+/** 일부 역프록시(nginx 등)에서 `/api` 접두만 제거되면 여기 경로로 도착 → 404 방지 */
+app.post(
+    '/admin/dashboard/run-init-batch',
+    authenticateToken,
+    checkRole(['admin']),
+    handleRunDashboardInitBatch
+);
+
 // ==================== 로그 조회 API (운영자) ====================
 
 app.get('/api/admin/logs', authenticateToken, checkRole(['admin']), async (req, res) => {
@@ -2369,8 +2603,9 @@ app.put('/api/admin/users/:id/reset-password', authenticateToken, checkRole(['ad
         const { id } = req.params;
         const { newPassword } = req.body;
 
-        if (!newPassword || newPassword.length < 4) {
-            return res.status(400).json({ error: '비밀번호는 최소 4자 이상이어야 합니다' });
+        const pwCheck = validatePasswordComplexity(newPassword);
+        if (!pwCheck.valid) {
+            return res.status(400).json({ error: pwCheck.error });
         }
 
         const hashedPassword = await bcrypt.hash(newPassword, 10);
@@ -2822,12 +3057,9 @@ app.put('/api/users/profile/password', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: '현재 비밀번호와 새 비밀번호를 입력해주세요' });
         }
 
-        if (newPassword.length < 4) {
-            return res.status(400).json({ error: '새 비밀번호는 최소 4자 이상이어야 합니다' });
-        }
-
-        if (newPassword.length > 100) {
-            return res.status(400).json({ error: '비밀번호는 최대 100자까지 가능합니다' });
+        const pwCheck = validatePasswordComplexity(newPassword);
+        if (!pwCheck.valid) {
+            return res.status(400).json({ error: pwCheck.error });
         }
 
         // 🔒 보안: 현재 비밀번호 확인 (본인 인증)
@@ -4147,25 +4379,33 @@ app.get('/api/gemini/quota/today', authenticateToken, checkRole(['admin']), asyn
             conn.release();
         }
         
-        // gemini_quota_usage 테이블에서 계정별 현황 조회
-        const [quotaUsage] = await pool.query(`
-            SELECT 
-                ga.account_name,
-                ga.account_name as account_email,
-                ga.account_email as real_account_email,
-                ga.daily_quota_limit,
-                COALESCE(gqu.request_count, 0) as daily_analysis_count,
-                COALESCE(gqu.success_count, 0) as success_count,
-                COALESCE(gqu.failed_count, 0) as failed_count,
-                COALESCE(gqu.is_quota_exceeded, FALSE) as quota_exhausted_count,
-                gqu.quota_exceeded_at as last_429_error_time,
-                gqu.updated_at as last_used_at,
-                ga.is_active,
-                ga.created_at
-            FROM gemini_accounts ga
-            LEFT JOIN gemini_quota_usage gqu ON ga.id = gqu.account_id AND gqu.usage_date = ?
-            ORDER BY ga.display_order ASC, ga.created_at DESC
-        `, [today]);
+        // gemini_quota_usage 테이블에서 계정별 현황 조회 (UTC 세션으로 last_used_at, quota_exceeded_at 확보)
+        let quotaUsage;
+        const connQuota = await pool.getConnection();
+        try {
+            await connQuota.query("SET time_zone = '+00:00'");
+            [quotaUsage] = await connQuota.query(`
+                SELECT 
+                    ga.id as gemini_account_id,
+                    ga.account_name,
+                    ga.account_name as account_email,
+                    ga.account_email as real_account_email,
+                    ga.daily_quota_limit,
+                    COALESCE(gqu.request_count, 0) as daily_analysis_count,
+                    COALESCE(gqu.success_count, 0) as success_count,
+                    COALESCE(gqu.failed_count, 0) as failed_count,
+                    COALESCE(gqu.is_quota_exceeded, FALSE) as quota_exhausted_count,
+                    gqu.quota_exceeded_at as last_429_error_time,
+                    gqu.updated_at as last_used_at,
+                    ga.is_active,
+                    ga.created_at
+                FROM gemini_accounts ga
+                LEFT JOIN gemini_quota_usage gqu ON ga.id = gqu.account_id AND gqu.usage_date = ?
+                ORDER BY ga.display_order ASC, ga.created_at DESC
+            `, [today]);
+        } finally {
+            connQuota.release();
+        }
         
         // run_ai_analysis가 현재 사용 중인 계정 (logs/current_running_account.json)
         let currentActiveAccountEmail = null;
@@ -4180,18 +4420,22 @@ app.get('/api/gemini/quota/today', authenticateToken, checkRole(['admin']), asyn
 
         // 계정별 사용률 계산 (일일 분석 건수 기준)
         const accountsWithUsage = quotaUsage.map(acc => ({
-            id: acc.account_name,
-            account_name: acc.account_name.replace('.gemini_', ''),
+            gemini_account_id: acc.gemini_account_id,
+            id: `ga-${acc.gemini_account_id}`,
+            row_key: acc.gemini_account_id,
+            account_folder: acc.account_name,
+            /** DB gemini_accounts.account_name (폴더명 등, 이벤트 집계 키) */
             account_email: acc.account_name,
+            account_name: acc.account_name.replace('.gemini_', ''),
             real_account_email: acc.real_account_email || null,
             display_order: 1,
             daily_quota_limit: acc.daily_quota_limit || 1500,
             request_count: acc.daily_analysis_count,
             success_count: acc.success_count,
             failed_count: acc.failed_count,
-            is_quota_exceeded: acc.quota_exceeded_count,
-            quota_exceeded_at: acc.last_429_error_time ? toKstDateTimeString(acc.last_429_error_time) : null,
-            last_used_at: acc.last_used_at ? toKstDateTimeString(acc.last_used_at) : null,
+            is_quota_exceeded: acc.quota_exhausted_count,
+            quota_exceeded_at: acc.last_429_error_time ? utcToIsoString(acc.last_429_error_time) : null,
+            last_used_at: acc.last_used_at ? utcToIsoString(acc.last_used_at) : null,
             usage_rate: acc.daily_analysis_count > 0 
                 ? ((acc.daily_analysis_count / (acc.daily_quota_limit || 1500)) * 100).toFixed(1) 
                 : 0,
@@ -4261,6 +4505,70 @@ app.get('/api/gemini/quota/today', authenticateToken, checkRole(['admin']), asyn
     } catch (err) {
         logger.error('[AI 할당량 조회 실패]', err);
         res.status(500).json({ error: 'AI 할당량 조회 중 오류가 발생했습니다' });
+    }
+});
+
+// 오늘(KST) gemini_quota_usage 의 할당량 소진 표시만 해제 (Google API 할당량은 바꿀 수 없음) - 운영자만
+app.post('/api/gemini/quota/clear-exhausted', authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const rawId = req.body?.account_id;
+        const account_id = typeof rawId === 'string' ? parseInt(rawId, 10) : Number(rawId);
+        const account_name = typeof req.body?.account_name === 'string' ? req.body.account_name.trim() : '';
+
+        let acctRows;
+        if (Number.isFinite(account_id) && account_id > 0) {
+            [acctRows] = await pool.query(
+                'SELECT id, account_name, account_email FROM gemini_accounts WHERE id = ? LIMIT 1',
+                [account_id]
+            );
+        } else if (account_name) {
+            [acctRows] = await pool.query(
+                'SELECT id, account_name, account_email FROM gemini_accounts WHERE account_name = ? LIMIT 1',
+                [account_name]
+            );
+        } else {
+            return res.status(400).json({
+                error: 'account_id(양의 정수) 또는 account_name(문자열) 이 필요합니다'
+            });
+        }
+
+        if (!acctRows?.length) {
+            return res.status(404).json({
+                error: 'gemini_accounts에 해당 계정이 없습니다',
+                account_id: Number.isFinite(account_id) ? account_id : undefined,
+                account_name: account_name || undefined
+            });
+        }
+
+        const resolvedAccountName = acctRows[0].account_name;
+        const accountId = acctRows[0].id;
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
+
+        const [upd] = await pool.query(`
+            UPDATE gemini_quota_usage
+            SET is_quota_exceeded = FALSE, quota_exceeded_at = NULL
+            WHERE account_id = ? AND usage_date = ?
+        `, [accountId, today]);
+
+        logger.info(
+            `[할당량] 소진 표시 해제: account_id=${accountId}, account_name=${resolvedAccountName}, date=${today}, affected=${upd.affectedRows}`
+        );
+
+        res.json({
+            success: true,
+            message:
+                upd.affectedRows > 0
+                    ? '오늘 날짜 기준 할당량 소진(DB) 표시를 해제했습니다'
+                    : '오늘자 gemini_quota_usage 행이 없거나 이미 소진 표시가 아닙니다 (통과 처리)',
+            account_id: accountId,
+            account_name: resolvedAccountName,
+            account_email: acctRows[0].account_email || null,
+            usage_date: today,
+            affected_rows: upd.affectedRows
+        });
+    } catch (err) {
+        logger.error('[AI 할당량 소진 표시 해제 실패]', err);
+        res.status(500).json({ error: '처리 중 오류가 발생했습니다', details: err.message });
     }
 });
 

@@ -7,6 +7,7 @@ import {
 import { Search, CheckCircle, Timer, Lock } from '@mui/icons-material';
 import axios from 'axios';
 import { API_URL } from '../config';
+import { PASSWORD_POLICY_HINT, validatePasswordComplexity } from '../utils/passwordPolicy';
 
 export default function FindAccount() {
   const [tab, setTab] = useState(0);
@@ -113,8 +114,9 @@ export default function FindAccount() {
       return;
     }
     
-    if (resetPwForm.newPassword.length < 6) {
-      setError('비밀번호는 최소 6자 이상이어야 합니다');
+    const pwCheck = validatePasswordComplexity(resetPwForm.newPassword);
+    if (!pwCheck.valid) {
+      setError(pwCheck.error);
       return;
     }
     
@@ -289,7 +291,8 @@ export default function FindAccount() {
                     margin="normal" 
                     required 
                     autoFocus
-                    helperText="최소 6자 이상 입력해주세요"
+                    error={!!resetPwForm.newPassword && !validatePasswordComplexity(resetPwForm.newPassword).valid}
+                    helperText={PASSWORD_POLICY_HINT}
                   />
                   <Button type="submit" fullWidth variant="contained" size="large" color="success" sx={{ mt: 3 }}>
                     비밀번호 재설정 완료

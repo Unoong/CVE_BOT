@@ -7,6 +7,7 @@ import {
 import { PersonAdd, Email, CheckCircle, Send, Timer } from '@mui/icons-material';
 import axios from 'axios';
 import { API_URL, SITE_NAME } from '../config';
+import { PASSWORD_POLICY_HINT, validatePasswordComplexity } from '../utils/passwordPolicy';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -181,9 +182,10 @@ export default function Register() {
       return;
     }
 
-    if (form.password.length < 4) {
-      addLog('❌ 비밀번호는 최소 4자 이상', 'error');
-      setError('비밀번호는 최소 4자 이상이어야 합니다');
+    const pwCheck = validatePasswordComplexity(form.password);
+    if (!pwCheck.valid) {
+      addLog(`❌ ${pwCheck.error}`, 'error');
+      setError(pwCheck.error);
       return;
     }
 
@@ -375,6 +377,10 @@ export default function Register() {
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2, textAlign: 'center' }}>
                 회원 정보를 입력해주세요
               </Typography>
+
+              <Alert severity="info" sx={{ mb: 1 }}>
+                비밀번호 규칙: {PASSWORD_POLICY_HINT}으로 설정해주세요.
+              </Alert>
               
               <TextField 
                 fullWidth 
@@ -393,7 +399,8 @@ export default function Register() {
                 onChange={(e) => setForm({ ...form, password: e.target.value })} 
                 margin="normal" 
                 required 
-                helperText="최소 4자 이상" 
+                error={!!form.password && !validatePasswordComplexity(form.password).valid}
+                helperText={PASSWORD_POLICY_HINT} 
               />
               <TextField 
                 fullWidth 
@@ -403,6 +410,8 @@ export default function Register() {
                 onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })} 
                 margin="normal" 
                 required 
+                error={!!form.confirmPassword && form.password !== form.confirmPassword}
+                helperText={form.confirmPassword && form.password !== form.confirmPassword ? '비밀번호가 일치하지 않습니다' : ' '}
               />
               <TextField 
                 fullWidth 

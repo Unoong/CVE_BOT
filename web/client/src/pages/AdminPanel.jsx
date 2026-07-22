@@ -8,6 +8,7 @@ import { Delete, Edit, LockReset, SupervisorAccount, Badge } from '@mui/icons-ma
 import axios from 'axios';
 import { API_URL } from '../config';
 import { formatDate, formatTime } from '../utils/dateFormat';
+import { PASSWORD_POLICY_HINT, validatePasswordComplexity } from '../utils/passwordPolicy';
 
 export default function AdminPanel() {
   const [users, setUsers] = useState([]);
@@ -59,8 +60,14 @@ export default function AdminPanel() {
     setError('');
     setSuccess('');
     
-    if (!newPassword || newPassword.length < 4) {
-      setError('비밀번호는 최소 4자 이상이어야 합니다');
+    if (!newPassword) {
+      setError('비밀번호를 입력해주세요');
+      return;
+    }
+
+    const pwCheck = validatePasswordComplexity(newPassword);
+    if (!pwCheck.valid) {
+      setError(pwCheck.error);
       return;
     }
 
@@ -329,7 +336,8 @@ export default function AdminPanel() {
                 label="새 비밀번호"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                helperText="최소 4자 이상"
+                error={!!newPassword && !validatePasswordComplexity(newPassword).valid}
+                helperText={PASSWORD_POLICY_HINT}
                 autoFocus
               />
             </Box>

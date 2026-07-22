@@ -7,6 +7,7 @@ import { Person, Edit, Lock, Save, Cancel } from '@mui/icons-material';
 import axios from 'axios';
 import { API_URL } from '../config';
 import { formatDateTime } from '../utils/dateFormat';
+import { PASSWORD_POLICY_HINT, validatePasswordComplexity } from '../utils/passwordPolicy';
 
 export default function Profile() {
   const [profile, setProfile] = useState(null);
@@ -83,8 +84,9 @@ export default function Profile() {
       return;
     }
 
-    if (passwordForm.newPassword.length < 4) {
-      setError('새 비밀번호는 최소 4자 이상이어야 합니다');
+    const pwCheck = validatePasswordComplexity(passwordForm.newPassword);
+    if (!pwCheck.valid) {
+      setError(pwCheck.error);
       return;
     }
 
@@ -267,10 +269,10 @@ export default function Profile() {
                   💡 보안 팁
                 </Typography>
                 <Typography variant="caption" display="block" mb={0.5}>
-                  • 비밀번호는 최소 8자 이상 권장
+                  • 비밀번호는 {PASSWORD_POLICY_HINT} (필수)
                 </Typography>
                 <Typography variant="caption" display="block" mb={0.5}>
-                  • 영문, 숫자, 특수문자 조합 사용
+                  • 영문, 숫자, 특수문자를 모두 포함해야 합니다
                 </Typography>
                 <Typography variant="caption" display="block" mb={0.5}>
                   • 다른 사이트와 동일한 비밀번호 사용 금지
@@ -325,7 +327,8 @@ export default function Profile() {
               label="새 비밀번호"
               value={passwordForm.newPassword}
               onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
-              helperText="최소 4자 이상"
+              error={!!passwordForm.newPassword && !validatePasswordComplexity(passwordForm.newPassword).valid}
+              helperText={PASSWORD_POLICY_HINT}
               sx={{ mb: 2 }}
             />
             <TextField
@@ -334,6 +337,8 @@ export default function Profile() {
               label="새 비밀번호 확인"
               value={passwordForm.confirmPassword}
               onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+              error={!!passwordForm.confirmPassword && passwordForm.newPassword !== passwordForm.confirmPassword}
+              helperText={passwordForm.confirmPassword && passwordForm.newPassword !== passwordForm.confirmPassword ? '비밀번호가 일치하지 않습니다' : ' '}
             />
           </Box>
         </DialogContent>
