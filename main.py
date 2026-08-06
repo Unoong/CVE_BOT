@@ -15,7 +15,7 @@ from db_manager import (get_db_connection, create_table, create_cve_info_table,
                          insert_integrated_data)
 from github_collector import GitHubCollector
 from translator import translate_with_fallback
-from file_manager import download_and_extract_zip, get_next_index
+from file_manager import download_and_extract_zip, get_next_index, resolve_existing_poc_path
 from cve_info_collector import get_cve_info, save_cve_info_to_file
 from config_loader import ConfigLoader
 
@@ -123,7 +123,21 @@ def process_repository(repo_info, conn, config):
     )
     
     if download_path is None:
-        download_path = "다운로드 실패"
+        # 이전 시도/수동 배치로 디스크에만 있는 경우 경로 복구
+        recovered = resolve_existing_poc_path(
+            cve_code,
+            title=repo_info.get('title'),
+            link=repo_info.get('html_url'),
+            base_path=config['paths']['cve_folder'],
+        )
+        if recovered:
+            download_path = recovered
+            log_print(
+                f"[경로복구] 다운로드 실패였으나 디스크에서 발견: {cve_code} → {download_path}",
+                'info',
+            )
+        else:
+            download_path = "다운로드 실패"
     
     # CVE 정보 수집 및 저장
     process_cve_info(conn, cve_code, download_path)

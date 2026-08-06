@@ -5,10 +5,17 @@ import mysql.connector
 from mysql.connector import Error
 from logger import log_print
 
+# CIRCL CSAF 등 대용량 LONGTEXT INSERT 시 패킷/문법 오류 방지 (바이트 기준, 서버 상한 이하일 때만 적용됨)
+SESSION_MAX_ALLOWED_PACKET = 64 * 1024 * 1024
+
 
 def get_db_connection(config):
     """
     데이터베이스 연결 반환
+    
+    CSAF JSON(이모지·4-byte 유니코드·대용량) 저장을 위해 utf8mb4 및 세션 패킷 상한을 설정합니다.
+    세션 변수 설정이 거부되면(권한·읽기 전용 등) 연결은 유지합니다.
+    max_allowed_packet 세션이 서버에서 막힌 경우(1621)는 흔한 구성이라 경고를 내지 않습니다.
     
     Args:
         config: 설정 딕셔너리
@@ -17,14 +24,36 @@ def get_db_connection(config):
         mysql.connector.connection 객체 또는 None
     """
     try:
+        db = config['database']
         conn = mysql.connector.connect(
-            host=config['database']['host'],
-            port=config['database']['port'],
-            user=config['database']['user'],
-            password=config['database']['password'],
-            database=config['database']['database']
+            host=db['host'],
+            port=db['port'],
+            user=db['user'],
+            password=db['password'],
+            database=db['database'],
+            charset='utf8mb4',
+            use_unicode=True,
+            collation='utf8mb4_unicode_ci',
+            init_command="SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci",
         )
-        log_print("[DB] 데이터베이스 연결 성공")
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SET SESSION max_allowed_packet = %s",
+                (SESSION_MAX_ALLOWED_PACKET,),
+            )
+            cur.close()
+        except Error as se:
+            errno = getattr(se, 'errno', None)
+            # MySQL 8 등: SESSION max_allowed_packet 은 읽기 전용인 배포가 많음 → 소음 제거
+            if errno == 1621:
+                pass
+            else:
+                log_print(
+                    f"[DB] SESSION max_allowed_packet 설정 실패(서버 상한/권한 확인): {se}",
+                    'warning',
+                )
+        log_print("[DB] 데이터베이스 연결 성공 (utf8mb4)")
         return conn
     except Error as e:
         log_print(f"[DB 연결 오류] {e}", 'error')
@@ -146,6 +175,9 @@ def insert_cve_info(conn, cve_info):
     """
     CVE_Info 테이블에 데이터 삽입
     
+    대용량/특수문자 Response_data는 utf8mb4 연결 + prepared statement 우선,
+    실패 시 일반 커서로 재시도합니다. NUL(0x00)은 MySQL TEXT 전송 문제 방지를 위해 제거합니다.
+    
     Args:
         conn: 데이터베이스 연결 객체
         cve_info: CVE 정보 딕셔너리
@@ -153,45 +185,75 @@ def insert_cve_info(conn, cve_info):
     Returns:
         bool: 성공 여부
     """
-    try:
-        cursor = conn.cursor()
-        
-        cursor.execute('''
+    def _strip_nul(v):
+        if isinstance(v, str) and '\x00' in v:
+            return v.replace('\x00', '')
+        return v
+
+    sql = '''
             INSERT INTO CVE_Info 
             (collect_time, CVE_Code, state, dateReserved, datePublished, dateUpdated,
              product, descriptions, effect_version, cweId, Attak_Type, 
              CVSS_Score, CVSS_Vertor, CVSS_Serverity, CVSS_vertorString, 
              solutions, Response_data)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ''', (
-            cve_info['collect_time'],
-            cve_info['CVE_Code'],
-            cve_info['state'],
-            cve_info['dateReserved'],
-            cve_info['datePublished'],
-            cve_info['dateUpdated'],
-            cve_info['product'],
-            cve_info['descriptions'],
-            cve_info['effect_version'],
-            cve_info['cweId'],
-            cve_info['Attak_Type'],
-            cve_info['CVSS_Score'],
-            cve_info['CVSS_Vertor'],
-            cve_info['CVSS_Serverity'],
-            cve_info['CVSS_vertorString'],
-            cve_info['solutions'],
-            cve_info['Response_data']
-        ))
-        
+        '''
+    params = (
+        _strip_nul(cve_info['collect_time']),
+        _strip_nul(cve_info['CVE_Code']),
+        _strip_nul(cve_info['state']),
+        _strip_nul(cve_info['dateReserved']),
+        _strip_nul(cve_info['datePublished']),
+        _strip_nul(cve_info['dateUpdated']),
+        _strip_nul(cve_info['product']),
+        _strip_nul(cve_info['descriptions']),
+        _strip_nul(cve_info['effect_version']),
+        _strip_nul(cve_info['cweId']),
+        _strip_nul(cve_info['Attak_Type']),
+        _strip_nul(cve_info['CVSS_Score']),
+        _strip_nul(cve_info['CVSS_Vertor']),
+        _strip_nul(cve_info['CVSS_Serverity']),
+        _strip_nul(cve_info['CVSS_vertorString']),
+        _strip_nul(cve_info['solutions']),
+        _strip_nul(cve_info['Response_data']),
+    )
+    cursor = None
+    try:
+        try:
+            cursor = conn.cursor(prepared=True)
+            cursor.execute(sql, params)
+        except Error as prep_err:
+            log_print(
+                f"[DB CVE_Info] Prepared INSERT 실패 → 일반 커서로 재시도: {prep_err}",
+                'warning',
+            )
+            try:
+                conn.rollback()
+            except Error:
+                pass
+            if cursor:
+                try:
+                    cursor.close()
+                except Error:
+                    pass
+                cursor = None
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+
         conn.commit()
-        cursor.close()
         log_print(f"[DB] CVE_Info 데이터 삽입 성공: {cve_info['CVE_Code']}", 'info')
         return True
-        
+
     except Error as e:
         log_print(f"[DB CVE_Info 삽입 오류] {e}", 'error')
         conn.rollback()
         return False
+    finally:
+        if cursor:
+            try:
+                cursor.close()
+            except Error:
+                pass
 
 
 def get_cve_count(conn, cve_code):
@@ -361,6 +423,38 @@ def get_unanalyzed_cves(conn):
     except Error as e:
         log_print(f"[DB 미분석 CVE 조회 오류] {e}", 'error')
         return []
+
+
+def update_github_download_path(conn, record_id, download_path):
+    """
+    Github_CVE_Info.download_path 갱신 (경로 복구용)
+
+    Args:
+        conn: DB 연결
+        record_id: Github_CVE_Info.id
+        download_path: 복구한 로컬 경로
+
+    Returns:
+        bool: 성공 여부
+    """
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE Github_CVE_Info
+            SET download_path = %s
+            WHERE id = %s
+            """,
+            (download_path, record_id),
+        )
+        conn.commit()
+        affected = cursor.rowcount
+        cursor.close()
+        return affected > 0
+    except Error as e:
+        log_print(f"[DB download_path 갱신 오류] {e}", 'error')
+        conn.rollback()
+        return False
 
 
 def get_cve_info_pending(conn):

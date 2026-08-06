@@ -2,9 +2,89 @@
 파일 관리 모듈 (ZIP 다운로드 및 압축 해제)
 """
 import os
+import re
 import zipfile
 import requests
 from logger import log_print
+
+
+def _normalize_repo_token(value):
+    """폴더/제목/레포명 비교용 정규화."""
+    if not value:
+        return ''
+    return re.sub(r'[^a-z0-9]+', '', str(value).lower())
+
+
+def _repo_slug_from_link(link):
+    """GitHub URL에서 repository slug 추출."""
+    if not link or 'github.com' not in str(link):
+        return None
+    parts = str(link).rstrip('/').split('/')
+    if len(parts) < 2:
+        return None
+    return parts[-1] or None
+
+
+def resolve_existing_poc_path(cve_code, title=None, link=None, base_path='CVE'):
+    """
+    DB에 '다운로드 실패' 등으로 남았어도 디스크에 PoC가 있으면 경로를 복구한다.
+
+    Returns:
+        str | None: 예) CVE\\CVE-2026-3854\\3 (os.path.join 형식)
+    """
+    if not cve_code:
+        return None
+
+    cve_root = os.path.join(base_path, cve_code)
+    if not os.path.isdir(cve_root):
+        return None
+
+    needles = []
+    for raw in (title, _repo_slug_from_link(link)):
+        if not raw:
+            continue
+        base = _normalize_repo_token(raw)
+        if not base:
+            continue
+        needles.extend([
+            base,
+            _normalize_repo_token(f'{raw}-main'),
+            _normalize_repo_token(f'{raw}-master'),
+        ])
+    needles = [n for n in dict.fromkeys(needles) if n]
+    if not needles:
+        return None
+
+    index_dirs = []
+    for name in os.listdir(cve_root):
+        full = os.path.join(cve_root, name)
+        if os.path.isdir(full) and name.isdigit():
+            index_dirs.append((int(name), full, name))
+    index_dirs.sort(key=lambda x: x[0])
+
+    for _, idx_full, idx_name in index_dirs:
+        try:
+            children = [
+                c for c in os.listdir(idx_full)
+                if os.path.isdir(os.path.join(idx_full, c))
+            ]
+        except OSError:
+            continue
+
+        for child in children:
+            child_norm = _normalize_repo_token(child)
+            for needle in needles:
+                if needle in child_norm or child_norm in needle:
+                    return os.path.join(base_path, cve_code, idx_name)
+
+        # 하위 폴더가 1개뿐이고 slug가 포함되면 채택
+        if len(children) == 1:
+            only = _normalize_repo_token(children[0])
+            for needle in needles:
+                if needle and needle in only:
+                    return os.path.join(base_path, cve_code, idx_name)
+
+    return None
 
 
 def download_and_extract_zip(url, cve_code, index, base_path='CVE'):

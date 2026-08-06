@@ -16,7 +16,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 from db_manager import (get_db_connection, create_ai_analysis_table,
-                         get_unanalyzed_cves, create_quota_management_table)
+                         get_unanalyzed_cves, create_quota_management_table,
+                         update_github_download_path)
+from file_manager import resolve_existing_poc_path
+from config_loader import ConfigLoader
 from ai_analyzer import (analyze_cve_with_gemini, save_analysis_to_db,
                           save_size_exceeded_placeholder,
                           update_ai_check_status, update_cve_info_product)
@@ -753,14 +756,57 @@ def process_one_cve_thread_safe(cve_data, current_account_index, config, task_nu
         return ('failed', cve_code, link)
 
     try:
-        # 다운로드 경로 확인
-        if download_path == "다운로드 실패" or not download_path:
-            logger.warning(f"[Task #{task_num}] ⏭️  건너뜀: {cve_code} (다운로드 실패) - AI_chk 유지하여 재시도 가능")
-            with thread_lock:
-                log_quota_event(current_account_index, 'failed', cve_code, link, '다운로드 실패', conn=conn)
-            return ('failed', cve_code, link)
+        # 다운로드 경로 확인/복구
+        path_missing = (
+            download_path == "다운로드 실패"
+            or not download_path
+            or not Path(str(download_path)).exists()
+        )
+        if path_missing:
+            try:
+                app_cfg = ConfigLoader.load_config() or {}
+                cve_base = (app_cfg.get('paths') or {}).get('cve_folder', 'CVE')
+            except Exception:
+                cve_base = 'CVE'
 
-        # 경로 존재 확인
+            recovered = resolve_existing_poc_path(
+                cve_code,
+                title=title,
+                link=link,
+                base_path=cve_base,
+            )
+            if recovered and Path(recovered).exists():
+                logger.info(
+                    f"[Task #{task_num}] 🔧 경로 복구: {download_path!r} → {recovered}"
+                )
+                download_path = recovered
+                record_id = cve_data.get('id')
+                if record_id:
+                    with thread_lock:
+                        if update_github_download_path(conn, record_id, recovered):
+                            logger.info(
+                                f"[Task #{task_num}] 💾 DB download_path 갱신 (id={record_id})"
+                            )
+            elif download_path == "다운로드 실패" or not download_path:
+                logger.warning(
+                    f"[Task #{task_num}] ⏭️  건너뜀: {cve_code} (다운로드 실패) - AI_chk 유지하여 재시도 가능"
+                )
+                with thread_lock:
+                    log_quota_event(
+                        current_account_index, 'failed', cve_code, link, '다운로드 실패', conn=conn
+                    )
+                return ('failed', cve_code, link)
+            else:
+                logger.warning(
+                    f"[Task #{task_num}] ⏭️  건너뜀: {cve_code} (경로 없음) - AI_chk 유지하여 재시도 가능"
+                )
+                with thread_lock:
+                    log_quota_event(
+                        current_account_index, 'failed', cve_code, link, '경로 없음', conn=conn
+                    )
+                return ('failed', cve_code, link)
+
+        # 경로 존재 재확인
         path = Path(download_path)
         if not path.exists():
             logger.warning(f"[Task #{task_num}] ⏭️  건너뜀: {cve_code} (경로 없음) - AI_chk 유지하여 재시도 가능")
