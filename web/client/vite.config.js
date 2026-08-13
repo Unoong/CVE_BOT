@@ -1,15 +1,5 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import fs from 'fs'
-import path from 'path'
-
-// Windows CMD QuickEdit Mode 비활성화 (클릭 시 멈춤 현상 방지)
-if (process.platform === 'win32') {
-  try {
-    const { exec } = require('child_process');
-    exec('mode con: cols=120 lines=30', () => {});
-  } catch (e) {}
-}
 
 export default defineConfig({
   plugins: [react()],
@@ -17,10 +7,12 @@ export default defineConfig({
     host: '0.0.0.0',  // 외부 접근 허용
     port: 3001,       // Caddy가 3000 사용 → Vite는 3001
     strictPort: true,
+    // Caddy(3000) 뒤에서 HMR: 브라우저는 wss://도메인:3000 으로 접속,
+    // Vite 서버는 3001에서만 listen (공인 IP:3000 bind 금지 → EADDRNOTAVAIL 방지)
     hmr: {
       protocol: 'wss',
       host: 'www.ds-aiplatform.com',
-      port: 3000
+      clientPort: 3000,
     },
     proxy: {
       '/api': {
