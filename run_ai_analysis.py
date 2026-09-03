@@ -698,7 +698,7 @@ def update_dashboard_stats(conn):
                 (SELECT COUNT(*) FROM Github_CVE_Info) as total_pocs,
                 (SELECT COUNT(*) FROM Github_CVE_Info WHERE AI_chk = 'Y') as analyzed_pocs,
                 (SELECT COUNT(DISTINCT cve) FROM Github_CVE_Info WHERE AI_chk = 'Y') as unique_analyzed_pocs,
-                (SELECT COUNT(*) FROM Github_CVE_Info WHERE AI_chk = 'N') as pending_pocs
+                (SELECT COUNT(*) FROM Github_CVE_Info WHERE AI_chk = 'N' AND (download_path IS NULL OR download_path <> '다운로드 실패')) as pending_pocs
             ON DUPLICATE KEY UPDATE
                 total_cves = VALUES(total_cves),
                 total_pocs = VALUES(total_pocs),
@@ -788,10 +788,12 @@ def process_one_cve_thread_safe(cve_data, current_account_index, config, task_nu
                                 f"[Task #{task_num}] 💾 DB download_path 갱신 (id={record_id})"
                             )
             elif download_path == "다운로드 실패" or not download_path:
+                # 다운로드 실패는 재시도하지 않고 분석 스킵 처리 (AI_chk='S')
                 logger.warning(
-                    f"[Task #{task_num}] ⏭️  건너뜀: {cve_code} (다운로드 실패) - AI_chk 유지하여 재시도 가능"
+                    f"[Task #{task_num}] ⏭️  건너뜀: {cve_code} (다운로드 실패) - AI_chk='S'로 분석 제외"
                 )
                 with thread_lock:
+                    update_ai_check_status(conn, link, 'S')
                     log_quota_event(
                         current_account_index, 'failed', cve_code, link, '다운로드 실패', conn=conn
                     )

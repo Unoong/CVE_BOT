@@ -173,14 +173,17 @@ async function initDashboardStats() {
         console.log('✅ dashboard_recent_pocs 테이블 생성 완료\n');
 
         console.log('2️⃣  초기 통계 데이터 생성 중...');
-        const today = new Date().toISOString().split('T')[0];
+        // UTC 자정 기준이 아닌 Asia/Seoul 달력 날짜 (Python run_ai_analysis·현지 집계와 맞춤)
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
         
         // 기본 통계 (COUNT 사용 - 정확한 개수)
         const [[cveInfo]] = await pool.query('SELECT COUNT(*) as count FROM CVE_Info');
         const [[pocInfo]] = await pool.query('SELECT COUNT(*) as count FROM Github_CVE_Info');
         const [[analysisInfo]] = await pool.query('SELECT COUNT(*) as count FROM CVE_Packet_AI_Analysis');
         const [[uniqueAnalysisInfo]] = await pool.query('SELECT COUNT(DISTINCT link) as count FROM CVE_Packet_AI_Analysis');
-        const [[pendingInfo]] = await pool.query("SELECT COUNT(*) as count FROM Github_CVE_Info WHERE AI_chk = 'N'");
+        const [[pendingInfo]] = await pool.query(
+            "SELECT COUNT(*) as count FROM Github_CVE_Info WHERE AI_chk = 'N' AND (download_path IS NULL OR download_path <> '다운로드 실패')"
+        );
         const [[cves2025Info]] = await pool.query("SELECT COUNT(*) as count FROM CVE_Info WHERE CVE_Code LIKE 'CVE-2025-%'");
         const [[pocsTodayInfo]] = await pool.query("SELECT COUNT(*) as count FROM Github_CVE_Info WHERE DATE(collect_time) = CURDATE()");
 

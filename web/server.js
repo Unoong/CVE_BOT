@@ -1179,9 +1179,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
         }
         
         // pending_pocs는 실시간 조회 (run_ai_analysis와 동기화 - 캐시 stale 방지)
+        // 다운로드 실패 건은 분석 불가이므로 대기 집계에서 제외
         try {
             const [[row]] = await pool.query(
-                "SELECT COUNT(*) as pending_pocs FROM Github_CVE_Info WHERE AI_chk = 'N'"
+                "SELECT COUNT(*) as pending_pocs FROM Github_CVE_Info WHERE AI_chk = 'N' AND (download_path IS NULL OR download_path <> '다운로드 실패')"
             );
             basicStats.pending_pocs = Number(row?.pending_pocs ?? basicStats.pending_pocs);
         } catch (e) {
