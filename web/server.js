@@ -1178,15 +1178,21 @@ app.get('/api/dashboard/stats', async (req, res) => {
             });
         }
         
-        // pending_pocs는 실시간 조회 (run_ai_analysis와 동기화 - 캐시 stale 방지)
-        // 다운로드 실패 건은 분석 불가이므로 대기 집계에서 제외
+        // pending/total_pocs 실시간 조회 (run_ai_analysis와 동기화 - 캐시 stale 방지)
+        // 다운로드 실패·AI_chk='S'(model_refusal/timeout 등)는 대기·수집 집계에서 제외
         try {
             const [[row]] = await pool.query(
-                "SELECT COUNT(*) as pending_pocs FROM Github_CVE_Info WHERE AI_chk = 'N' AND (download_path IS NULL OR download_path <> '다운로드 실패')"
+                `SELECT
+                    (SELECT COUNT(*) FROM Github_CVE_Info
+                      WHERE AI_chk = 'N'
+                        AND (download_path IS NULL OR download_path <> '다운로드 실패')) AS pending_pocs,
+                    (SELECT COUNT(*) FROM Github_CVE_Info
+                      WHERE AI_chk IS NULL OR AI_chk <> 'S') AS total_pocs`
             );
             basicStats.pending_pocs = Number(row?.pending_pocs ?? basicStats.pending_pocs);
+            basicStats.total_pocs = Number(row?.total_pocs ?? basicStats.total_pocs);
         } catch (e) {
-            logger.warn('[대시보드] pending_pocs 실시간 조회 실패, 캐시값 사용:', e.message);
+            logger.warn('[대시보드] pending/total_pocs 실시간 조회 실패, 캐시값 사용:', e.message);
         }
         
         const statDate = rowDateToYMD(basicStats.stat_date) || basicStats.stat_date;

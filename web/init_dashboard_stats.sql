@@ -175,12 +175,12 @@ BEGIN
     SELECT 
         current_date,
         (SELECT MAX(id) FROM CVE_Info),
-        (SELECT MAX(id) FROM Github_CVE_Info),
+        (SELECT COUNT(*) FROM Github_CVE_Info WHERE AI_chk IS NULL OR AI_chk <> 'S'),
         (SELECT COUNT(*) FROM CVE_Packet_AI_Analysis),
         (SELECT COUNT(DISTINCT link) FROM CVE_Packet_AI_Analysis),
         (SELECT COUNT(*) FROM Github_CVE_Info WHERE AI_chk = 'N' AND (download_path IS NULL OR download_path <> '다운로드 실패')),
         (SELECT COUNT(*) FROM CVE_Info WHERE CVE_Code LIKE 'CVE-2025-%'),
-        (SELECT COUNT(*) FROM Github_CVE_Info WHERE DATE(collect_time) = current_date)
+        (SELECT COUNT(*) FROM Github_CVE_Info WHERE DATE(collect_time) = current_date AND (AI_chk IS NULL OR AI_chk <> 'S'))
     ON DUPLICATE KEY UPDATE
         total_cves = VALUES(total_cves),
         total_pocs = VALUES(total_pocs),

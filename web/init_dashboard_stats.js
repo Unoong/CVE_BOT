@@ -178,14 +178,19 @@ async function initDashboardStats() {
         
         // 기본 통계 (COUNT 사용 - 정확한 개수)
         const [[cveInfo]] = await pool.query('SELECT COUNT(*) as count FROM CVE_Info');
-        const [[pocInfo]] = await pool.query('SELECT COUNT(*) as count FROM Github_CVE_Info');
+        // AI_chk='S'(다운로드 실패·model_refusal·timeout 등)는 PoC 수집 집계에서 제외
+        const [[pocInfo]] = await pool.query(
+            "SELECT COUNT(*) as count FROM Github_CVE_Info WHERE AI_chk IS NULL OR AI_chk <> 'S'"
+        );
         const [[analysisInfo]] = await pool.query('SELECT COUNT(*) as count FROM CVE_Packet_AI_Analysis');
         const [[uniqueAnalysisInfo]] = await pool.query('SELECT COUNT(DISTINCT link) as count FROM CVE_Packet_AI_Analysis');
         const [[pendingInfo]] = await pool.query(
             "SELECT COUNT(*) as count FROM Github_CVE_Info WHERE AI_chk = 'N' AND (download_path IS NULL OR download_path <> '다운로드 실패')"
         );
         const [[cves2025Info]] = await pool.query("SELECT COUNT(*) as count FROM CVE_Info WHERE CVE_Code LIKE 'CVE-2025-%'");
-        const [[pocsTodayInfo]] = await pool.query("SELECT COUNT(*) as count FROM Github_CVE_Info WHERE DATE(collect_time) = CURDATE()");
+        const [[pocsTodayInfo]] = await pool.query(
+            "SELECT COUNT(*) as count FROM Github_CVE_Info WHERE DATE(collect_time) = CURDATE() AND (AI_chk IS NULL OR AI_chk <> 'S')"
+        );
 
         await pool.query(`
             INSERT INTO dashboard_stats_daily (

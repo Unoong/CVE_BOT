@@ -85,6 +85,12 @@ MODEL_RESULT_ERRORS = frozenset({
     'poc_size_exceeded',
 })
 
+# 재시도해도 의미 없는 실패 → AI_chk='S' (분석 제외 + PoC 집계 제외)
+SKIP_ANALYSIS_ERRORS = frozenset({
+    'model_refusal',
+    'timeout',
+})
+
 # 현재 실행 중 계정 파일 (gemini-quota 패널 '오늘 사용' 표시용)
 CURRENT_RUNNING_ACCOUNT_FILE = Path(__file__).resolve().parent / "logs" / "current_running_account.json"
 
@@ -695,7 +701,7 @@ def update_dashboard_stats(conn):
             SELECT 
                 %s as stat_date,
                 (SELECT COUNT(*) FROM CVE_Info) as total_cves,
-                (SELECT COUNT(*) FROM Github_CVE_Info) as total_pocs,
+                (SELECT COUNT(*) FROM Github_CVE_Info WHERE AI_chk IS NULL OR AI_chk <> 'S') as total_pocs,
                 (SELECT COUNT(*) FROM Github_CVE_Info WHERE AI_chk = 'Y') as analyzed_pocs,
                 (SELECT COUNT(DISTINCT cve) FROM Github_CVE_Info WHERE AI_chk = 'Y') as unique_analyzed_pocs,
                 (SELECT COUNT(*) FROM Github_CVE_Info WHERE AI_chk = 'N' AND (download_path IS NULL OR download_path <> '다운로드 실패')) as pending_pocs
@@ -954,12 +960,16 @@ def process_one_cve_thread_safe(cve_data, current_account_index, config, task_nu
         if isinstance(analysis_result, dict) and analysis_result.get('error') not in (None, 'quota_exceeded', 'rate_limit', 'failed', 'quota_suspicious'):
             err_type = analysis_result.get('error', 'unknown')
             err_msg = analysis_result.get('message', str(err_type))[:100]
-            if err_type in MODEL_RESULT_ERRORS:
+            if err_type in MODEL_RESULT_ERRORS or err_type in SKIP_ANALYSIS_ERRORS:
+                skip_permanently = err_type in SKIP_ANALYSIS_ERRORS
                 logger.warning(
                     f"[Task #{task_num}] ⏭️ 분석 불가(모델/데이터): {cve_code} - "
                     f"{err_type}: {err_msg}"
+                    + (" → AI_chk='S' 분석/집계 제외" if skip_permanently else "")
                 )
                 with thread_lock:
+                    if skip_permanently:
+                        update_ai_check_status(conn, link, 'S')
                     log_quota_event(
                         current_account_index,
                         'failed',
