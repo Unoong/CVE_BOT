@@ -85,11 +85,40 @@ MODEL_RESULT_ERRORS = frozenset({
     'poc_size_exceeded',
 })
 
-# 재시도해도 의미 없는 실패 → AI_chk='S' (분석 제외 + PoC 집계 제외)
+# 재시도해도 의미 없는 실패 → 동일 PoC에서 N회 이상 시 AI_chk='S' (분석 제외 + PoC 집계 제외)
 SKIP_ANALYSIS_ERRORS = frozenset({
     'model_refusal',
     'timeout',
 })
+SKIP_ANALYSIS_FAIL_THRESHOLD = 5
+
+
+def count_skip_analysis_failures(conn, poc_link):
+    """동일 PoC의 model_refusal/timeout 실패 누적 횟수."""
+    if not conn or not poc_link:
+        return 0
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM gemini_quota_events
+            WHERE event_type = 'failed'
+              AND poc_link = %s
+              AND (
+                    error_message LIKE 'model_refusal%%'
+                 OR error_message LIKE 'timeout%%'
+              )
+            """,
+            (poc_link,),
+        )
+        row = cursor.fetchone() or {}
+        cursor.close()
+        return int(row.get('cnt') or 0)
+    except Exception as e:
+        logger.debug(f"[스킵 카운트] 조회 실패: {e}")
+        return 0
+
 
 # 현재 실행 중 계정 파일 (gemini-quota 패널 '오늘 사용' 표시용)
 CURRENT_RUNNING_ACCOUNT_FILE = Path(__file__).resolve().parent / "logs" / "current_running_account.json"
@@ -961,15 +990,7 @@ def process_one_cve_thread_safe(cve_data, current_account_index, config, task_nu
             err_type = analysis_result.get('error', 'unknown')
             err_msg = analysis_result.get('message', str(err_type))[:100]
             if err_type in MODEL_RESULT_ERRORS or err_type in SKIP_ANALYSIS_ERRORS:
-                skip_permanently = err_type in SKIP_ANALYSIS_ERRORS
-                logger.warning(
-                    f"[Task #{task_num}] ⏭️ 분석 불가(모델/데이터): {cve_code} - "
-                    f"{err_type}: {err_msg}"
-                    + (" → AI_chk='S' 분석/집계 제외" if skip_permanently else "")
-                )
                 with thread_lock:
-                    if skip_permanently:
-                        update_ai_check_status(conn, link, 'S')
                     log_quota_event(
                         current_account_index,
                         'failed',
@@ -977,6 +998,32 @@ def process_one_cve_thread_safe(cve_data, current_account_index, config, task_nu
                         link,
                         f"{err_type}: {err_msg}",
                         conn=conn,
+                    )
+                    skip_permanently = False
+                    fail_count = 0
+                    if err_type in SKIP_ANALYSIS_ERRORS:
+                        fail_count = count_skip_analysis_failures(conn, link)
+                        if fail_count >= SKIP_ANALYSIS_FAIL_THRESHOLD:
+                            update_ai_check_status(conn, link, 'S')
+                            skip_permanently = True
+
+                if skip_permanently:
+                    logger.warning(
+                        f"[Task #{task_num}] ⏭️ 분석 불가(모델/데이터): {cve_code} - "
+                        f"{err_type}: {err_msg} "
+                        f"→ {fail_count}회 누적 ≥ {SKIP_ANALYSIS_FAIL_THRESHOLD}회, "
+                        f"AI_chk='S' 분석/집계 제외"
+                    )
+                else:
+                    extra = ""
+                    if err_type in SKIP_ANALYSIS_ERRORS:
+                        extra = (
+                            f" ({fail_count}/{SKIP_ANALYSIS_FAIL_THRESHOLD}회, "
+                            f"{SKIP_ANALYSIS_FAIL_THRESHOLD}회 이상 시 스킵)"
+                        )
+                    logger.warning(
+                        f"[Task #{task_num}] ⏭️ 분석 불가(모델/데이터): {cve_code} - "
+                        f"{err_type}: {err_msg}{extra}"
                     )
                 return ('failed', cve_code, link)
 
