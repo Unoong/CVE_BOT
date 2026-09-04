@@ -2938,6 +2938,277 @@ app.put('/api/admin/cve-limits', authenticateToken, checkRole(['admin']), async 
     }
 });
 
+// ==================== 주의모니터링 CVE API ====================
+const MONITOR_DEFAULT_LIMIT = 20;
+const MONITOR_CVE_RE = /^CVE-\d{4}-\d+$/i;
+const CONFIG_JSON_PATH = path.join(__dirname, '..', 'config.json');
+const ENRICH_SCRIPT_PATH = path.join(__dirname, '..', 'enrich_monitored_cve.py');
+
+async function readAppConfig() {
+    const configData = await fs.readFile(CONFIG_JSON_PATH, 'utf-8');
+    return JSON.parse(configData);
+}
+
+async function writeAppConfig(config) {
+    await fs.writeFile(CONFIG_JSON_PATH, JSON.stringify(config, null, 4), 'utf-8');
+}
+
+function ensureMonitorMeta(config) {
+    if (!config.collection) config.collection = {};
+    if (!config.collection.cve_specific_limits) config.collection.cve_specific_limits = {};
+    if (!config.collection.cve_monitor_meta) config.collection.cve_monitor_meta = {};
+    return config;
+}
+
+function nowLocalDateTime() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function runEnrichMonitoredCve(cveCode, { collect = true } = {}) {
+    return new Promise((resolve, reject) => {
+        const args = [ENRICH_SCRIPT_PATH, cveCode];
+        if (!collect) args.push('--no-collect');
+        execFile(
+            'python',
+            args,
+            {
+                cwd: path.join(__dirname, '..'),
+                maxBuffer: 16 * 1024 * 1024,
+                windowsHide: true,
+                timeout: 180000,
+            },
+            (err, stdout, stderr) => {
+                const text = String(stdout || '').trim();
+                const lastLine = text.split(/\r?\n/).filter(Boolean).pop() || '';
+                let parsed = null;
+                try {
+                    parsed = JSON.parse(lastLine);
+                } catch (_) {
+                    parsed = null;
+                }
+                if (parsed) {
+                    resolve({ parsed, stderr: String(stderr || ''), code: err?.code });
+                    return;
+                }
+                reject(err || new Error(`enrich 결과 파싱 실패: ${(stderr || stdout || '').slice(0, 400)}`));
+            }
+        );
+    });
+}
+
+// 모니터링 목록 (카드용 상세 포함)
+app.get('/api/monitored-cves', authenticateToken, async (req, res) => {
+    try {
+        const config = ensureMonitorMeta(await readAppConfig());
+        const limits = config.collection.cve_specific_limits || {};
+        const meta = config.collection.cve_monitor_meta || {};
+        const cveCodes = Object.keys(limits).sort((a, b) => a.localeCompare(b));
+
+        // 기존 모니터링 CVE에 meta가 없으면 현재 시각으로 초기화 (기존 PoC를 NEW로 오인하지 않음)
+        let metaChanged = false;
+        const now = nowLocalDateTime();
+        for (const cveCode of cveCodes) {
+            if (!meta[cveCode]) {
+                meta[cveCode] = { added_at: now, last_seen_at: now };
+                metaChanged = true;
+            } else if (!meta[cveCode].last_seen_at) {
+                meta[cveCode].last_seen_at = meta[cveCode].added_at || now;
+                metaChanged = true;
+            }
+        }
+        if (metaChanged) {
+            config.collection.cve_monitor_meta = meta;
+            await writeAppConfig(config);
+        }
+
+        const items = [];
+        for (const cveCode of cveCodes) {
+            const lastSeen = meta[cveCode]?.last_seen_at || meta[cveCode]?.added_at || null;
+            const [[info]] = await pool.query(
+                `SELECT CVE_Code, product, state, CVSS_Score, CVSS_Serverity, datePublished,
+                        LEFT(IFNULL(descriptions,''), 400) AS descriptions,
+                        cweId, Attak_Type, collect_time
+                 FROM CVE_Info WHERE CVE_Code = ? LIMIT 1`,
+                [cveCode]
+            );
+            const [[pocStats]] = await pool.query(
+                `SELECT
+                    COUNT(*) AS poc_count,
+                    SUM(CASE WHEN AI_chk = 'Y' THEN 1 ELSE 0 END) AS ai_count,
+                    SUM(CASE WHEN AI_chk = 'S' THEN 1 ELSE 0 END) AS skipped_count,
+                    MAX(collect_time) AS latest_poc_time,
+                    SUM(
+                      CASE
+                        WHEN ? IS NOT NULL AND ? <> '' AND collect_time > ?
+                        THEN 1 ELSE 0
+                      END
+                    ) AS new_poc_count
+                 FROM Github_CVE_Info
+                 WHERE cve = ?`,
+                [lastSeen, lastSeen, lastSeen, cveCode]
+            );
+
+            const newPocCount = Number(pocStats?.new_poc_count || 0);
+            items.push({
+                cve: cveCode,
+                limit: Number(limits[cveCode]) || MONITOR_DEFAULT_LIMIT,
+                added_at: meta[cveCode]?.added_at || null,
+                last_seen_at: lastSeen,
+                has_cve_info: !!info,
+                cve_info: info || null,
+                poc_count: Number(pocStats?.poc_count || 0),
+                ai_count: Number(pocStats?.ai_count || 0),
+                skipped_count: Number(pocStats?.skipped_count || 0),
+                latest_poc_time: pocStats?.latest_poc_time || null,
+                new_poc_count: newPocCount,
+                has_new_poc: newPocCount > 0,
+            });
+        }
+
+        // 신규 PoC 있는 카드 우선
+        items.sort((a, b) => {
+            if (a.has_new_poc !== b.has_new_poc) return a.has_new_poc ? -1 : 1;
+            return a.cve.localeCompare(b.cve);
+        });
+
+        res.json({
+            defaultLimit: config.collection?.max_cve_per_item || 5,
+            monitorDefaultLimit: MONITOR_DEFAULT_LIMIT,
+            isAdmin: req.user.role === 'admin',
+            items,
+            total_new_pocs: items.reduce((s, it) => s + (it.new_poc_count || 0), 0),
+        });
+    } catch (err) {
+        console.error('[monitored-cves GET]', err);
+        logger.error('[monitored-cves GET]', err);
+        res.status(500).json({ error: '모니터링 목록 조회 실패' });
+    }
+});
+
+// 모니터링 CVE 추가 (+ CIRCL/GitHub 보강)
+app.post('/api/monitored-cves', authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const raw = String(req.body?.cve || '').trim().toUpperCase();
+        const limit = Number(req.body?.limit ?? MONITOR_DEFAULT_LIMIT);
+        const doCollect = req.body?.collect !== false;
+
+        if (!MONITOR_CVE_RE.test(raw)) {
+            return res.status(400).json({ error: '올바른 CVE 형식을 입력하세요 (예: CVE-2025-1234)' });
+        }
+        if (!Number.isFinite(limit) || limit < 1) {
+            return res.status(400).json({ error: '수집 한도는 1 이상이어야 합니다' });
+        }
+
+        const config = ensureMonitorMeta(await readAppConfig());
+        const already = Object.prototype.hasOwnProperty.call(config.collection.cve_specific_limits, raw);
+        const now = nowLocalDateTime();
+
+        config.collection.cve_specific_limits[raw] = limit;
+        if (!config.collection.cve_monitor_meta[raw]) {
+            config.collection.cve_monitor_meta[raw] = {
+                added_at: now,
+                last_seen_at: now,
+            };
+        } else if (!already) {
+            config.collection.cve_monitor_meta[raw].added_at = now;
+            config.collection.cve_monitor_meta[raw].last_seen_at = now;
+        }
+        await writeAppConfig(config);
+
+        let enrich = null;
+        let enrichError = null;
+        try {
+            const r = await runEnrichMonitoredCve(raw, { collect: doCollect });
+            enrich = r.parsed;
+        } catch (e) {
+            enrichError = e.message || String(e);
+            logger.warn('[monitored-cves POST] enrich 실패:', enrichError);
+        }
+
+        res.json({
+            message: already ? '모니터링 설정이 갱신되었습니다' : '모니터링 CVE가 추가되었습니다',
+            cve: raw,
+            limit,
+            already,
+            enrich,
+            enrichError,
+        });
+    } catch (err) {
+        console.error('[monitored-cves POST]', err);
+        logger.error('[monitored-cves POST]', err);
+        res.status(500).json({ error: '모니터링 CVE 추가 실패' });
+    }
+});
+
+// 모니터링 해제
+app.delete('/api/monitored-cves/:cve', authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const cve = String(req.params.cve || '').trim().toUpperCase();
+        if (!MONITOR_CVE_RE.test(cve)) {
+            return res.status(400).json({ error: '잘못된 CVE 형식' });
+        }
+        const config = ensureMonitorMeta(await readAppConfig());
+        delete config.collection.cve_specific_limits[cve];
+        delete config.collection.cve_monitor_meta[cve];
+        await writeAppConfig(config);
+        res.json({ message: '모니터링에서 제거되었습니다', cve });
+    } catch (err) {
+        console.error('[monitored-cves DELETE]', err);
+        res.status(500).json({ error: '모니터링 제거 실패' });
+    }
+});
+
+// 신규 PoC 확인 처리 (last_seen_at 갱신)
+app.post('/api/monitored-cves/:cve/ack', authenticateToken, async (req, res) => {
+    try {
+        const cve = String(req.params.cve || '').trim().toUpperCase();
+        if (!MONITOR_CVE_RE.test(cve)) {
+            return res.status(400).json({ error: '잘못된 CVE 형식' });
+        }
+        const config = ensureMonitorMeta(await readAppConfig());
+        if (!config.collection.cve_specific_limits[cve]) {
+            return res.status(404).json({ error: '모니터링 목록에 없는 CVE입니다' });
+        }
+        const now = nowLocalDateTime();
+        if (!config.collection.cve_monitor_meta[cve]) {
+            config.collection.cve_monitor_meta[cve] = { added_at: now, last_seen_at: now };
+        } else {
+            config.collection.cve_monitor_meta[cve].last_seen_at = now;
+        }
+        await writeAppConfig(config);
+        res.json({ message: '신규 PoC를 확인 처리했습니다', cve, last_seen_at: now });
+    } catch (err) {
+        console.error('[monitored-cves ACK]', err);
+        res.status(500).json({ error: '확인 처리 실패' });
+    }
+});
+
+// 수집 한도만 수정
+app.put('/api/monitored-cves/:cve', authenticateToken, checkRole(['admin']), async (req, res) => {
+    try {
+        const cve = String(req.params.cve || '').trim().toUpperCase();
+        const limit = Number(req.body?.limit);
+        if (!MONITOR_CVE_RE.test(cve)) {
+            return res.status(400).json({ error: '잘못된 CVE 형식' });
+        }
+        if (!Number.isFinite(limit) || limit < 1) {
+            return res.status(400).json({ error: '수집 한도는 1 이상이어야 합니다' });
+        }
+        const config = ensureMonitorMeta(await readAppConfig());
+        if (!config.collection.cve_specific_limits[cve]) {
+            return res.status(404).json({ error: '모니터링 목록에 없는 CVE입니다' });
+        }
+        config.collection.cve_specific_limits[cve] = limit;
+        await writeAppConfig(config);
+        res.json({ message: '수집 한도가 저장되었습니다', cve, limit });
+    } catch (err) {
+        console.error('[monitored-cves PUT]', err);
+        res.status(500).json({ error: '한도 수정 실패' });
+    }
+});
+
 // 사용자 삭제
 app.delete('/api/admin/users/:id', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
