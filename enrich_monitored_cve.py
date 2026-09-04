@@ -25,11 +25,10 @@ from config_loader import ConfigLoader
 from db_manager import (
     get_db_connection,
     check_cve_info_exists,
-    insert_cve_info,
     check_duplicate,
     get_cve_count,
 )
-from cve_info_collector import get_cve_info
+from circl_cve_collector import ensure_cve_info_in_db
 from github_collector import GitHubCollector
 from main import process_repository, get_max_poc_limit
 
@@ -64,6 +63,7 @@ def enrich(cve_code: str, do_collect: bool = True) -> dict:
         "cve_code": cve_code,
         "cve_info_existed": False,
         "cve_info_fetched": False,
+        "cve_info_status": None,
         "cve_info": None,
         "github_found": 0,
         "github_in_db": 0,
@@ -91,20 +91,17 @@ def enrich(cve_code: str, do_collect: bool = True) -> dict:
         return result
 
     try:
-        existing = check_cve_info_exists(conn, cve_code)
-        if existing:
-            result["cve_info_existed"] = True
-            result["cve_info"] = _cve_summary(existing)
-        else:
-            info = get_cve_info(cve_code)
-            if info:
-                if insert_cve_info(conn, info):
-                    result["cve_info_fetched"] = True
-                    result["cve_info"] = _cve_summary(info)
-                else:
-                    result["errors"].append("cve_info_insert_failed")
-            else:
-                result["errors"].append("circl_not_found")
+        # CIRCL → CVE_Info (circl_cve_collector와 동일 insert 경로)
+        ensure = ensure_cve_info_in_db(conn, cve_code)
+        result["cve_info_status"] = ensure.get("status")
+        result["cve_info_existed"] = ensure.get("status") == "exists"
+        result["cve_info_fetched"] = ensure.get("status") == "inserted"
+        result["cve_info"] = _cve_summary(ensure.get("cve_info"))
+        if ensure.get("status") == "not_found":
+            result["errors"].append("circl_not_found")
+        elif ensure.get("status") == "failed":
+            result["errors"].append("cve_info_insert_failed")
+            result["ok"] = False
 
         # GitHub 검색 (해당 CVE 키워드)
         tokens = config.get("github", {}).get("tokens") or []
@@ -183,6 +180,8 @@ def enrich(cve_code: str, do_collect: bool = True) -> dict:
         final_info = check_cve_info_exists(conn, cve_code)
         if final_info:
             result["cve_info"] = _cve_summary(final_info)
+            if not result["cve_info_status"]:
+                result["cve_info_status"] = "exists"
 
     finally:
         try:

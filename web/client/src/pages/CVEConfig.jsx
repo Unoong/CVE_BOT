@@ -442,6 +442,18 @@ export default function CVEConfig() {
                             <OpenInNew fontSize="small" />
                           </IconButton>
                         </Tooltip>
+                        <Tooltip title="CVE 목록에서 검색">
+                          <IconButton
+                            size="small"
+                            onClick={() =>
+                              navigate(
+                                `/cve?page=1&limit=20&sortBy=datePublished&sortOrder=DESC&search=${encodeURIComponent(item.cve)}`
+                              )
+                            }
+                          >
+                            <Storage fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
                         {isAdmin && (
                           editingCVE === item.cve ? (
                             <>
@@ -542,10 +554,16 @@ export default function CVEConfig() {
             )}
             {addResult?.enrich && (
               <Alert severity="success" sx={{ fontFamily: font }}>
-                CIRCL: {addResult.enrich.cve_info_fetched ? '신규 수집' : addResult.enrich.cve_info_existed ? 'DB 기존' : '없음'}
+                CVE_Info: {addResult.enrich.cve_info_status === 'inserted' ? 'CIRCL에서 DB 신규 저장'
+                  : addResult.enrich.cve_info_status === 'exists' ? 'DB에 이미 존재'
+                  : addResult.enrich.cve_info_fetched ? '신규 수집'
+                  : addResult.enrich.cve_info_existed ? 'DB 기존' : '없음'}
                 {' / '}
                 GitHub 검색 {addResult.enrich.github_found ?? 0}건, DB PoC {addResult.enrich.github_in_db ?? 0}건,
                 신규 수집 {addResult.enrich.github_collected_new ?? 0}건
+                <br />
+                ※ CVE 목록 조회 시 hasPoc=Y &amp; hasAi=Y 필터가 켜져 있으면 PoC/AI 없는 CVE는 안 보입니다.
+                검색만 하거나 필터를 끄면 조회됩니다.
               </Alert>
             )}
             {addResult?.enrichError && (

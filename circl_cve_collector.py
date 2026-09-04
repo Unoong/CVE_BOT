@@ -13,7 +13,7 @@ import json
 import sys
 import io
 import logging
-from logging.handlers import TimedRotatingFileHandler
+from logger import SafeTimedRotatingFileHandler
 import os
 from datetime import datetime
 from db_manager import get_db_connection, create_cve_info_table, check_cve_info_exists, insert_cve_info
@@ -29,7 +29,7 @@ def _setup_circl_logger() -> logging.Logger:
 
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-    file_handler = TimedRotatingFileHandler(
+    file_handler = SafeTimedRotatingFileHandler(
         os.path.join(logs_dir, 'circl_collector.log'),
         when='midnight',
         interval=1,
@@ -563,6 +563,47 @@ def collect_and_save_circl_cves(limit=DEFAULT_LIMIT):
             logger.info("🔒 [DB] 연결 종료")
 
 
+def ensure_cve_info_in_db(conn, cve_code):
+    """
+    CIRCL 단건 API로 CVE를 조회해 CVE_Info에 없으면 insert한다.
+    대량 수집(collect_and_save_circl_cves)과 동일 테이블·insert_cve_info 경로를 사용한다.
+
+    Returns:
+        dict: {
+          status: 'exists' | 'inserted' | 'not_found' | 'failed',
+          cve_info: dict | None
+        }
+    """
+    from cve_info_collector import get_cve_info
+
+    cve_code = (cve_code or "").strip().upper()
+    if not cve_code:
+        return {"status": "failed", "cve_info": None}
+
+    existing = check_cve_info_exists(conn, cve_code)
+    if existing:
+        logger.info(f"  ⏭️  {cve_code} - 이미 CVE_Info에 존재")
+        return {"status": "exists", "cve_info": existing}
+
+    logger.info(f"  📋 {cve_code} - CIRCL API 조회 후 CVE_Info 저장")
+    info = get_cve_info(cve_code)
+    if not info:
+        logger.warning(f"  ⚠️  {cve_code} - CIRCL에서 찾을 수 없음")
+        return {"status": "not_found", "cve_info": None}
+
+    if insert_cve_info(conn, info):
+        logger.info(
+            f"  ✅ {cve_code} 저장 완료 | 제품: {(info.get('product') or 'N/A')[:50]} | "
+            f"CVSS: {info.get('CVSS_Score', 'N/A')} ({info.get('CVSS_Serverity', 'N/A')})"
+        )
+        # insert 직후 DB 행 재조회
+        saved = check_cve_info_exists(conn, cve_code) or info
+        return {"status": "inserted", "cve_info": saved}
+
+    logger.error(f"  ❌ {cve_code} - CVE_Info 저장 실패")
+    return {"status": "failed", "cve_info": info}
+
+
 def test_api_and_show_sample():
     """
     API 테스트 및 샘플 데이터 출력 (디버깅용)
@@ -681,10 +722,27 @@ if __name__ == "__main__":
     parser.add_argument('--limit', type=int, default=100, help='수집할 CSAF 문서 개수 (기본값: 100)')
     parser.add_argument('--once', action='store_true', help='1회만 실행 (기본값: 무한 반복)')
     parser.add_argument('--interval', type=int, default=3600, help='반복 주기(초) (기본값: 3600초=1시간)')
+    parser.add_argument('--cve', type=str, help='단건 CVE를 CIRCL에서 조회해 CVE_Info에 저장')
     
     args = parser.parse_args()
     
-    if args.test:
+    if args.cve:
+        config = load_config()
+        if not config:
+            logger.error("설정 로드 실패")
+            sys.exit(1)
+        conn = get_db_connection(config)
+        if not conn:
+            logger.error("DB 연결 실패")
+            sys.exit(1)
+        try:
+            create_cve_info_table(conn)
+            result = ensure_cve_info_in_db(conn, args.cve)
+            logger.info(f"단건 결과: {result.get('status')}")
+            sys.exit(0 if result.get("status") in ("exists", "inserted") else 1)
+        finally:
+            conn.close()
+    elif args.test:
         # 테스트 모드
         test_api_and_show_sample()
     elif args.once:
