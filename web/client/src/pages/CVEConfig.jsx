@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Card, CardContent, Button, TextField,
   Dialog, DialogTitle, DialogContent, DialogActions, Alert, Chip,
-  Grid, CircularProgress, IconButton, Tooltip, Stack, Paper, InputAdornment
+  Grid, CircularProgress, IconButton, Tooltip, Stack, Paper
 } from '@mui/material';
 import {
   Add, Delete, Warning, Info, Refresh, OpenInNew, DoneAll,
@@ -14,6 +14,23 @@ import { API_URL } from '../config';
 
 const font = '"Noto Sans KR", sans-serif';
 const CARD_HEIGHT = 220;
+const BATCH_MAX = 30;
+
+function parseCveList(text) {
+  const parts = String(text || '')
+    .toUpperCase()
+    .split(/[\s,;|]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const seen = new Set();
+  const cves = [];
+  for (const p of parts) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    cves.push(p);
+  }
+  return cves;
+}
 
 function severityColor(sev) {
   const s = String(sev || '').toUpperCase();
@@ -96,8 +113,18 @@ export default function CVEConfig() {
   };
 
   const handleAddCVE = async () => {
-    if (!/^CVE-\d{4}-\d+$/.test(newCVE)) {
-      setError('올바른 CVE 형식을 입력하세요 (예: CVE-2025-1234)');
+    const cves = parseCveList(newCVE);
+    if (cves.length === 0) {
+      setError('등록할 CVE를 1개 이상 입력하세요');
+      return;
+    }
+    if (cves.length > BATCH_MAX) {
+      setError(`한 번에 최대 ${BATCH_MAX}개까지 등록할 수 있습니다`);
+      return;
+    }
+    const invalid = cves.filter((c) => !/^CVE-\d{4}-\d+$/.test(c));
+    if (invalid.length > 0) {
+      setError(`잘못된 CVE 형식: ${invalid.slice(0, 5).join(', ')}`);
       return;
     }
     if (!newReason.trim()) {
@@ -113,23 +140,26 @@ export default function CVEConfig() {
     setAddResult(null);
     try {
       const res = await axios.post(
-        `${API_URL}/monitored-cves`,
+        `${API_URL}/monitored-cves/batch`,
         {
-          cve: newCVE.toUpperCase(),
+          cves,
           limit: newLimit,
           reason: newReason.trim(),
           collect: true,
         },
-        { headers: { Authorization: `Bearer ${token()}` }, timeout: 200000 }
+        {
+          headers: { Authorization: `Bearer ${token()}` },
+          timeout: Math.max(200000, cves.length * 180000),
+        }
       );
       setAddResult(res.data);
-      setSuccess(res.data.message || '추가 완료');
+      setSuccess(res.data.message || '일괄 등록 완료');
       setNewCVE('');
       setNewReason('');
       setNewLimit(monitorDefaultLimit);
       await loadList();
     } catch (err) {
-      setError(err.response?.data?.error || 'CVE 추가 실패');
+      setError(err.response?.data?.error || 'CVE 일괄 등록 실패');
     } finally {
       setAdding(false);
     }
@@ -498,27 +528,24 @@ export default function CVEConfig() {
         </DialogTitle>
         <DialogContent>
           <Alert severity="info" sx={{ mb: 2, fontFamily: font }} icon={<Info />}>
-            모니터링 사유는 필수입니다. 추가 시 PoC 한도 {monitorDefaultLimit}개로 등록하고 CIRCL/GitHub 보강을 수행합니다.
+            CVE는 여러 줄·쉼표로 일괄 입력 가능합니다. 사유·한도는 공통 적용되며, 추가 시 CIRCL/GitHub 보강을 수행합니다 (최대 {BATCH_MAX}개).
           </Alert>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <TextField
-              label="CVE 코드"
-              placeholder="CVE-2025-1234"
+              label="CVE 코드 (여러 개 가능)"
+              placeholder={'CVE-2025-1234\nCVE-2025-5678\nCVE-2026-1111'}
               value={newCVE}
               disabled={adding}
               onChange={(e) => setNewCVE(e.target.value.toUpperCase())}
               fullWidth
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Warning sx={{ color: '#e65100' }} />
-                  </InputAdornment>
-                ),
-              }}
-              sx={{ '& .MuiInputBase-input': { fontFamily: 'monospace', fontWeight: 700 } }}
+              required
+              multiline
+              minRows={4}
+              helperText={`인식된 CVE ${parseCveList(newCVE).length}개 / 최대 ${BATCH_MAX}개`}
+              sx={{ '& .MuiInputBase-input': { fontFamily: 'ui-monospace, Consolas, monospace', fontWeight: 700 } }}
             />
             <TextField
-              label="주의모니터링 사유"
+              label="주의모니터링 사유 (공통)"
               placeholder="예: 사내 사용 제품 영향, 긴급 패치 필요 등"
               value={newReason}
               disabled={adding}
@@ -533,7 +560,7 @@ export default function CVEConfig() {
             />
             <TextField
               type="number"
-              label="최대 PoC 수집 개수"
+              label="최대 PoC 수집 개수 (공통)"
               value={newLimit}
               disabled={adding}
               onChange={(e) => setNewLimit(parseInt(e.target.value, 10) || 1)}
@@ -544,21 +571,33 @@ export default function CVEConfig() {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                 <CircularProgress size={22} />
                 <Typography sx={{ fontFamily: font }}>
-                  CIRCL/GitHub 조회 및 수집 중…
+                  {parseCveList(newCVE).length || ''}건 등록 및 CIRCL/GitHub 보강 중… (시간이 걸릴 수 있습니다)
                 </Typography>
               </Box>
             )}
-            {addResult?.enrich && (
+            {addResult?.results && (
+              <Alert
+                severity={addResult.enrichFailed ? 'warning' : 'success'}
+                sx={{ fontFamily: font }}
+              >
+                {addResult.message}
+                <Box component="ul" sx={{ m: 0, pl: 2, mt: 1, maxHeight: 160, overflow: 'auto' }}>
+                  {addResult.results.map((r) => (
+                    <li key={r.cve}>
+                      {r.cve}
+                      {r.already ? ' (갱신)' : ' (신규)'}
+                      {r.enrichError ? ` — 보강 경고: ${r.enrichError}` : ''}
+                    </li>
+                  ))}
+                </Box>
+              </Alert>
+            )}
+            {!addResult?.results && addResult?.enrich && (
               <Alert severity="success" sx={{ fontFamily: font }}>
                 CVE_Info: {addResult.enrich.cve_info_status === 'inserted' ? '신규 저장'
                   : addResult.enrich.cve_info_status === 'exists' ? 'DB 기존' : '없음'}
                 {' / '}
                 PoC {addResult.enrich.github_in_db ?? 0}건
-              </Alert>
-            )}
-            {addResult?.enrichError && (
-              <Alert severity="warning" sx={{ fontFamily: font }}>
-                보강 경고: {addResult.enrichError}
               </Alert>
             )}
           </Stack>
@@ -569,11 +608,15 @@ export default function CVEConfig() {
           </Button>
           <Button
             variant="contained"
-            disabled={adding || !newReason.trim()}
+            disabled={adding || !newReason.trim() || parseCveList(newCVE).length === 0}
             onClick={handleAddCVE}
             sx={{ fontFamily: font, fontWeight: 700, bgcolor: '#e65100', '&:hover': { bgcolor: '#bf360c' } }}
           >
-            {adding ? '처리 중…' : '추가'}
+            {adding
+              ? '처리 중…'
+              : parseCveList(newCVE).length > 1
+                ? `${parseCveList(newCVE).length}개 일괄 추가`
+                : '추가'}
           </Button>
         </DialogActions>
       </Dialog>
