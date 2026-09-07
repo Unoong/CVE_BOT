@@ -3,18 +3,17 @@ import { useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Card, CardContent, Button, TextField,
   Dialog, DialogTitle, DialogContent, DialogActions, Alert, Chip,
-  Grid, CircularProgress, IconButton, Tooltip, Divider, Stack,
-  Paper, InputAdornment
+  Grid, CircularProgress, IconButton, Tooltip, Stack, Paper, InputAdornment
 } from '@mui/material';
 import {
   Add, Delete, Warning, Info, Refresh, OpenInNew, DoneAll,
-  NewReleases, Security, Storage, Edit, Save, Cancel
+  NewReleases, Storage, Save
 } from '@mui/icons-material';
 import axios from 'axios';
 import { API_URL } from '../config';
-import { formatDate } from '../utils/dateFormat';
 
 const font = '"Noto Sans KR", sans-serif';
+const CARD_HEIGHT = 220;
 
 function severityColor(sev) {
   const s = String(sev || '').toUpperCase();
@@ -22,7 +21,7 @@ function severityColor(sev) {
   if (s.includes('HIGH')) return '#e65100';
   if (s.includes('MEDIUM')) return '#f9a825';
   if (s.includes('LOW')) return '#2e7d32';
-  return '#607d8b';
+  return '#78909c';
 }
 
 export default function CVEConfig() {
@@ -39,11 +38,9 @@ export default function CVEConfig() {
   const [addDialog, setAddDialog] = useState(false);
   const [newCVE, setNewCVE] = useState('');
   const [newLimit, setNewLimit] = useState(20);
+  const [newReason, setNewReason] = useState('');
   const [adding, setAdding] = useState(false);
   const [addResult, setAddResult] = useState(null);
-
-  const [editingCVE, setEditingCVE] = useState(null);
-  const [editLimit, setEditLimit] = useState(20);
   const [savingDefault, setSavingDefault] = useState(false);
 
   const token = () => localStorage.getItem('token');
@@ -98,6 +95,10 @@ export default function CVEConfig() {
       setError('올바른 CVE 형식을 입력하세요 (예: CVE-2025-1234)');
       return;
     }
+    if (!newReason.trim()) {
+      setError('주의모니터링 사유를 입력해주세요');
+      return;
+    }
     if (newLimit < 1) {
       setError('제한은 1 이상이어야 합니다');
       return;
@@ -108,12 +109,18 @@ export default function CVEConfig() {
     try {
       const res = await axios.post(
         `${API_URL}/monitored-cves`,
-        { cve: newCVE.toUpperCase(), limit: newLimit, collect: true },
+        {
+          cve: newCVE.toUpperCase(),
+          limit: newLimit,
+          reason: newReason.trim(),
+          collect: true,
+        },
         { headers: { Authorization: `Bearer ${token()}` }, timeout: 200000 }
       );
       setAddResult(res.data);
       setSuccess(res.data.message || '추가 완료');
       setNewCVE('');
+      setNewReason('');
       setNewLimit(monitorDefaultLimit);
       await loadList();
     } catch (err) {
@@ -150,24 +157,7 @@ export default function CVEConfig() {
     }
   };
 
-  const handleSaveLimit = async (cve) => {
-    try {
-      await axios.put(
-        `${API_URL}/monitored-cves/${cve}`,
-        { limit: editLimit },
-        { headers: { Authorization: `Bearer ${token()}` } }
-      );
-      setEditingCVE(null);
-      await loadList();
-    } catch (err) {
-      setError(err.response?.data?.error || '한도 저장 실패');
-    }
-  };
-
-  const openDetail = (cve) => {
-    navigate(`/cve/${cve}`);
-  };
-
+  const openDetail = (cve) => navigate(`/cve/${cve}`);
   const newItems = useMemo(() => items.filter((i) => i.has_new_poc), [items]);
 
   if (loading && items.length === 0) {
@@ -198,7 +188,7 @@ export default function CVEConfig() {
                 주의모니터링 취약점
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: font, color: '#5d4037' }}>
-                등록 CVE의 CIRCL 정보·PoC 현황을 카드로 확인하고, 신규 PoC 수집 시 강조 표시합니다 (수집 한도 기본 {monitorDefaultLimit}개)
+                등록 CVE의 심각도·모니터링 사유·PoC/AI 현황을 확인합니다
               </Typography>
             </Box>
           </Box>
@@ -226,6 +216,7 @@ export default function CVEConfig() {
                 onClick={() => {
                   setAddDialog(true);
                   setAddResult(null);
+                  setNewReason('');
                   setNewLimit(monitorDefaultLimit);
                 }}
                 sx={{
@@ -253,7 +244,6 @@ export default function CVEConfig() {
         </Alert>
       )}
 
-      {/* 기본 한도 */}
       <Card sx={{ mb: 3, borderRadius: 2, border: '1px solid #e0e0e0' }}>
         <CardContent>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }} justifyContent="space-between">
@@ -263,7 +253,7 @@ export default function CVEConfig() {
                 일반 CVE 기본 PoC 수집 한도
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ fontFamily: font }}>
-                모니터링에 등록되지 않은 CVE는 이 기본값을 사용합니다 (현재 모니터링 CVE는 개별 한도 적용)
+                모니터링 미등록 CVE는 이 기본값을 사용합니다
               </Typography>
             </Box>
             <Stack direction="row" spacing={1} alignItems="center">
@@ -295,7 +285,7 @@ export default function CVEConfig() {
 
       {newItems.length > 0 && (
         <Alert severity="warning" icon={<NewReleases />} sx={{ mb: 2, fontFamily: font, fontWeight: 600 }}>
-          신규 PoC가 수집된 모니터링 CVE {newItems.length}건이 있습니다. 카드의 「신규 확인」으로 배지를 해제할 수 있습니다.
+          신규 PoC가 수집된 모니터링 CVE {newItems.length}건 — 「신규 확인」으로 배지를 해제할 수 있습니다.
         </Alert>
       )}
 
@@ -309,189 +299,135 @@ export default function CVEConfig() {
       ) : (
         <Grid container spacing={2}>
           {items.map((item) => {
-            const info = item.cve_info;
+            const severity = item.severity || item.cve_info?.CVSS_Serverity || null;
+            const score = item.cvss_score || item.cve_info?.CVSS_Score || null;
             const isNew = !!item.has_new_poc;
+            const reason = item.reason || '사유 미등록';
+
             return (
-              <Grid item xs={12} md={6} lg={4} key={item.cve}>
+              <Grid item xs={12} sm={6} md={4} lg={3} key={item.cve}>
                 <Card
-                  elevation={isNew ? 6 : 1}
+                  elevation={isNew ? 4 : 1}
                   onClick={() => openDetail(item.cve)}
                   sx={{
-                    height: '100%',
+                    height: CARD_HEIGHT,
                     cursor: 'pointer',
                     borderRadius: 2,
                     border: isNew ? '2px solid #d32f2f' : '1px solid #e0e0e0',
-                    boxShadow: isNew ? '0 0 0 3px rgba(211,47,47,0.18)' : undefined,
-                    background: isNew
-                      ? 'linear-gradient(180deg, #fff5f5 0%, #ffffff 40%)'
-                      : '#fff',
-                    transition: 'transform .15s ease, box-shadow .15s ease',
-                    '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 },
+                    background: isNew ? '#fff8f8' : '#fff',
+                    display: 'flex',
+                    flexDirection: 'column',
                     position: 'relative',
+                    overflow: 'hidden',
+                    '&:hover': { boxShadow: 4 },
                   }}
                 >
                   {isNew && (
                     <Chip
                       icon={<NewReleases />}
-                      label={`NEW PoC ${item.new_poc_count}`}
+                      label={`NEW ${item.new_poc_count}`}
                       color="error"
                       size="small"
                       sx={{
                         position: 'absolute',
-                        top: 12,
-                        right: 12,
+                        top: 10,
+                        right: 10,
                         fontWeight: 800,
                         fontFamily: font,
                         zIndex: 1,
                       }}
                     />
                   )}
-                  <CardContent>
-                    <Stack spacing={1.2}>
-                      <Typography
-                        variant="h6"
-                        sx={{ fontFamily: 'ui-monospace, Consolas, monospace', fontWeight: 800, pr: isNew ? 12 : 0 }}
-                      >
-                        {item.cve}
-                      </Typography>
+                  <CardContent
+                    sx={{
+                      flex: 1,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 1,
+                      p: 2,
+                      '&:last-child': { pb: 2 },
+                      minHeight: 0,
+                    }}
+                  >
+                    <Typography
+                      sx={{
+                        fontFamily: 'ui-monospace, Consolas, monospace',
+                        fontWeight: 800,
+                        fontSize: '1.05rem',
+                        pr: isNew ? 9 : 0,
+                        lineHeight: 1.3,
+                      }}
+                    >
+                      {item.cve}
+                    </Typography>
 
-                      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                        {info?.CVSS_Serverity && (
-                          <Chip
-                            size="small"
-                            label={`${info.CVSS_Serverity}${info.CVSS_Score ? ` ${info.CVSS_Score}` : ''}`}
-                            sx={{
-                              bgcolor: severityColor(info.CVSS_Serverity),
-                              color: '#fff',
-                              fontWeight: 700,
-                            }}
-                          />
-                        )}
-                        {info?.state && <Chip size="small" label={info.state} variant="outlined" />}
-                        {!item.has_cve_info && (
-                          <Chip size="small" color="warning" label="CVE_Info 없음" />
-                        )}
-                      </Stack>
-
-                      <Typography
-                        variant="subtitle2"
-                        sx={{ fontFamily: font, fontWeight: 700, color: '#37474f' }}
-                        noWrap
-                        title={info?.product || ''}
-                      >
-                        {info?.product || '제품 정보 없음'}
-                      </Typography>
-
-                      <Typography
-                        variant="body2"
-                        color="text.secondary"
-                        sx={{
-                          fontFamily: font,
-                          minHeight: 44,
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical',
-                          overflow: 'hidden',
-                        }}
-                      >
-                        {info?.descriptions || 'CIRCL 설명 데이터가 없습니다. CVE 추가 시 API로 보강됩니다.'}
-                      </Typography>
-
-                      <Divider />
-
-                      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                    <Box>
+                      {severity ? (
                         <Chip
                           size="small"
-                          icon={<Security />}
-                          label={`PoC ${item.poc_count}/${item.limit}`}
-                          sx={{ fontFamily: font }}
+                          label={`${severity}${score ? ` ${score}` : ''}`}
+                          sx={{
+                            bgcolor: severityColor(severity),
+                            color: '#fff',
+                            fontWeight: 700,
+                            fontFamily: font,
+                          }}
                         />
-                        <Chip size="small" label={`AI ${item.ai_count}`} sx={{ fontFamily: font }} />
-                        {info?.datePublished && (
-                          <Chip
-                            size="small"
-                            variant="outlined"
-                            label={`게시 ${formatDate(info.datePublished) || info.datePublished}`}
-                            sx={{ fontFamily: font }}
-                          />
-                        )}
-                      </Stack>
+                      ) : (
+                        <Chip size="small" label="심각도 없음" variant="outlined" sx={{ fontFamily: font }} />
+                      )}
+                    </Box>
 
-                      <Stack
-                        direction="row"
-                        spacing={0.5}
-                        justifyContent="flex-end"
-                        onClick={(e) => e.stopPropagation()}
-                      >
+                    <Typography
+                      variant="body2"
+                      title={reason}
+                      sx={{
+                        fontFamily: font,
+                        color: item.reason ? '#37474f' : '#9e9e9e',
+                        flex: 1,
+                        minHeight: 0,
+                        overflow: 'hidden',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 3,
+                        WebkitBoxOrient: 'vertical',
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      {reason}
+                    </Typography>
+
+                    <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                      <Stack direction="row" spacing={1}>
+                        <Chip
+                          size="small"
+                          label={`PoC ${item.poc_count}`}
+                          sx={{ fontFamily: font, fontWeight: 600 }}
+                        />
+                        <Chip
+                          size="small"
+                          label={`AI ${item.ai_count}`}
+                          sx={{ fontFamily: font, fontWeight: 600 }}
+                        />
+                      </Stack>
+                      <Stack direction="row" spacing={0} onClick={(e) => e.stopPropagation()}>
                         {isNew && (
-                          <Tooltip title="신규 PoC 확인 처리">
-                            <Button
-                              size="small"
-                              variant="contained"
-                              color="error"
-                              startIcon={<DoneAll />}
-                              onClick={(e) => handleAck(item.cve, e)}
-                              sx={{ fontFamily: font, fontWeight: 700 }}
-                            >
-                              신규 확인
-                            </Button>
+                          <Tooltip title="신규 확인">
+                            <IconButton size="small" color="error" onClick={(e) => handleAck(item.cve, e)}>
+                              <DoneAll fontSize="small" />
+                            </IconButton>
                           </Tooltip>
                         )}
-                        <Tooltip title="상세 페이지">
+                        <Tooltip title="상세">
                           <IconButton size="small" onClick={() => openDetail(item.cve)}>
                             <OpenInNew fontSize="small" />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title="CVE 목록에서 검색">
-                          <IconButton
-                            size="small"
-                            onClick={() =>
-                              navigate(
-                                `/cve?page=1&limit=20&sortBy=datePublished&sortOrder=DESC&search=${encodeURIComponent(item.cve)}`
-                              )
-                            }
-                          >
-                            <Storage fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
                         {isAdmin && (
-                          editingCVE === item.cve ? (
-                            <>
-                              <TextField
-                                type="number"
-                                size="small"
-                                value={editLimit}
-                                onChange={(e) => setEditLimit(parseInt(e.target.value, 10) || 1)}
-                                inputProps={{ min: 1 }}
-                                sx={{ width: 88 }}
-                              />
-                              <IconButton color="primary" onClick={() => handleSaveLimit(item.cve)}>
-                                <Save fontSize="small" />
-                              </IconButton>
-                              <IconButton onClick={() => setEditingCVE(null)}>
-                                <Cancel fontSize="small" />
-                              </IconButton>
-                            </>
-                          ) : (
-                            <>
-                              <Tooltip title="수집 한도 수정">
-                                <IconButton
-                                  size="small"
-                                  onClick={() => {
-                                    setEditingCVE(item.cve);
-                                    setEditLimit(item.limit);
-                                  }}
-                                >
-                                  <Edit fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
-                              <Tooltip title="모니터링 해제">
-                                <IconButton size="small" color="error" onClick={() => handleDelete(item.cve)}>
-                                  <Delete fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
-                            </>
-                          )
+                          <Tooltip title="모니터링 해제">
+                            <IconButton size="small" color="error" onClick={() => handleDelete(item.cve)}>
+                              <Delete fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
                         )}
                       </Stack>
                     </Stack>
@@ -515,8 +451,7 @@ export default function CVEConfig() {
         </DialogTitle>
         <DialogContent>
           <Alert severity="info" sx={{ mb: 2, fontFamily: font }} icon={<Info />}>
-            추가 시 PoC 수집 한도 {monitorDefaultLimit}개(변경 가능)로 등록하고, DB에 CVE 정보가 없으면 CIRCL API로
-            가져오며 GitHub에서 관련 PoC를 확인·수집합니다.
+            모니터링 사유는 필수입니다. 추가 시 PoC 한도 {monitorDefaultLimit}개로 등록하고 CIRCL/GitHub 보강을 수행합니다.
           </Alert>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <TextField
@@ -536,6 +471,20 @@ export default function CVEConfig() {
               sx={{ '& .MuiInputBase-input': { fontFamily: 'monospace', fontWeight: 700 } }}
             />
             <TextField
+              label="주의모니터링 사유"
+              placeholder="예: 사내 사용 제품 영향, 긴급 패치 필요 등"
+              value={newReason}
+              disabled={adding}
+              onChange={(e) => setNewReason(e.target.value)}
+              fullWidth
+              required
+              multiline
+              minRows={3}
+              inputProps={{ maxLength: 500 }}
+              helperText={`${newReason.length}/500`}
+              sx={{ '& .MuiInputBase-input': { fontFamily: font } }}
+            />
+            <TextField
               type="number"
               label="최대 PoC 수집 개수"
               value={newLimit}
@@ -548,27 +497,21 @@ export default function CVEConfig() {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                 <CircularProgress size={22} />
                 <Typography sx={{ fontFamily: font }}>
-                  CIRCL/GitHub 조회 및 수집 중… (최대 수 분 소요될 수 있습니다)
+                  CIRCL/GitHub 조회 및 수집 중…
                 </Typography>
               </Box>
             )}
             {addResult?.enrich && (
               <Alert severity="success" sx={{ fontFamily: font }}>
-                CVE_Info: {addResult.enrich.cve_info_status === 'inserted' ? 'CIRCL에서 DB 신규 저장'
-                  : addResult.enrich.cve_info_status === 'exists' ? 'DB에 이미 존재'
-                  : addResult.enrich.cve_info_fetched ? '신규 수집'
-                  : addResult.enrich.cve_info_existed ? 'DB 기존' : '없음'}
+                CVE_Info: {addResult.enrich.cve_info_status === 'inserted' ? '신규 저장'
+                  : addResult.enrich.cve_info_status === 'exists' ? 'DB 기존' : '없음'}
                 {' / '}
-                GitHub 검색 {addResult.enrich.github_found ?? 0}건, DB PoC {addResult.enrich.github_in_db ?? 0}건,
-                신규 수집 {addResult.enrich.github_collected_new ?? 0}건
-                <br />
-                ※ CVE 목록 조회 시 hasPoc=Y &amp; hasAi=Y 필터가 켜져 있으면 PoC/AI 없는 CVE는 안 보입니다.
-                검색만 하거나 필터를 끄면 조회됩니다.
+                PoC {addResult.enrich.github_in_db ?? 0}건
               </Alert>
             )}
             {addResult?.enrichError && (
               <Alert severity="warning" sx={{ fontFamily: font }}>
-                보강 스크립트 경고: {addResult.enrichError}
+                보강 경고: {addResult.enrichError}
               </Alert>
             )}
           </Stack>
@@ -579,7 +522,7 @@ export default function CVEConfig() {
           </Button>
           <Button
             variant="contained"
-            disabled={adding}
+            disabled={adding || !newReason.trim()}
             onClick={handleAddCVE}
             sx={{ fontFamily: font, fontWeight: 700, bgcolor: '#e65100', '&:hover': { bgcolor: '#bf360c' } }}
           >
