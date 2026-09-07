@@ -3070,9 +3070,11 @@ app.get('/api/monitored-cves', authenticateToken, async (req, res) => {
             });
         }
 
-        // 신규 PoC 있는 카드 우선
+        // 최근 등록순(왼쪽부터), 동시등록은 CVE 코드순
         items.sort((a, b) => {
-            if (a.has_new_poc !== b.has_new_poc) return a.has_new_poc ? -1 : 1;
+            const ta = a.added_at || '';
+            const tb = b.added_at || '';
+            if (ta !== tb) return tb.localeCompare(ta);
             return a.cve.localeCompare(b.cve);
         });
 
@@ -3123,9 +3125,15 @@ app.post('/api/monitored-cves', authenticateToken, checkRole(['admin']), async (
                 reason,
             };
         } else {
+            // 사유는 항상 최신 입력으로 갱신 (기존 meta에 reason 누락된 경우 보완)
             config.collection.cve_monitor_meta[raw].reason = reason;
             if (!already) {
                 config.collection.cve_monitor_meta[raw].added_at = now;
+                config.collection.cve_monitor_meta[raw].last_seen_at = now;
+            } else if (!config.collection.cve_monitor_meta[raw].added_at) {
+                config.collection.cve_monitor_meta[raw].added_at = now;
+            }
+            if (!config.collection.cve_monitor_meta[raw].last_seen_at) {
                 config.collection.cve_monitor_meta[raw].last_seen_at = now;
             }
         }
@@ -3145,6 +3153,7 @@ app.post('/api/monitored-cves', authenticateToken, checkRole(['admin']), async (
             message: already ? '모니터링 설정이 갱신되었습니다' : '모니터링 CVE가 추가되었습니다',
             cve: raw,
             limit,
+            reason,
             already,
             enrich,
             enrichError,
