@@ -3112,8 +3112,10 @@ app.get('/api/monitored-cves', authenticateToken, async (req, res) => {
             });
         }
 
-        // 최근 등록순(왼쪽부터), 동시등록은 CVE 코드순
+        // NEW PoC 우선 → 최근 등록순 → CVE 코드순
         items.sort((a, b) => {
+            if (a.has_new_poc !== b.has_new_poc) return a.has_new_poc ? -1 : 1;
+            if (a.new_poc_count !== b.new_poc_count) return b.new_poc_count - a.new_poc_count;
             const ta = a.added_at || '';
             const tb = b.added_at || '';
             if (ta !== tb) return tb.localeCompare(ta);
