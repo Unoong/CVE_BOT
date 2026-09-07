@@ -7,7 +7,7 @@ import {
 } from '@mui/material';
 import {
   Add, Delete, Warning, Info, Refresh, OpenInNew, DoneAll,
-  NewReleases, Storage, Save, Edit
+  NewReleases, Storage, Save
 } from '@mui/icons-material';
 import axios from 'axios';
 import { API_URL } from '../config';
@@ -59,11 +59,6 @@ export default function CVEConfig() {
   const [adding, setAdding] = useState(false);
   const [addResult, setAddResult] = useState(null);
   const [savingDefault, setSavingDefault] = useState(false);
-
-  const [reasonDialog, setReasonDialog] = useState(false);
-  const [reasonTarget, setReasonTarget] = useState(null);
-  const [editReason, setEditReason] = useState('');
-  const [savingReason, setSavingReason] = useState(false);
 
   const token = () => localStorage.getItem('token');
 
@@ -189,38 +184,6 @@ export default function CVEConfig() {
       await loadList();
     } catch (err) {
       setError(err.response?.data?.error || '확인 처리 실패');
-    }
-  };
-
-  const openReasonEdit = (item, e) => {
-    e?.stopPropagation?.();
-    setReasonTarget(item);
-    setEditReason(item.reason || '');
-    setReasonDialog(true);
-  };
-
-  const handleSaveReason = async () => {
-    if (!reasonTarget?.cve) return;
-    if (!editReason.trim()) {
-      setError('주의모니터링 사유를 입력해주세요');
-      return;
-    }
-    setSavingReason(true);
-    setError('');
-    try {
-      await axios.put(
-        `${API_URL}/monitored-cves/${reasonTarget.cve}`,
-        { reason: editReason.trim() },
-        { headers: { Authorization: `Bearer ${token()}` } }
-      );
-      setSuccess(`${reasonTarget.cve} 사유가 저장되었습니다`);
-      setReasonDialog(false);
-      setReasonTarget(null);
-      await loadList();
-    } catch (err) {
-      setError(err.response?.data?.error || '사유 저장 실패');
-    } finally {
-      setSavingReason(false);
     }
   };
 
@@ -448,7 +411,6 @@ export default function CVEConfig() {
                     <Typography
                       variant="body2"
                       title={reason}
-                      onClick={isAdmin ? (e) => openReasonEdit(item, e) : undefined}
                       sx={{
                         fontFamily: font,
                         color: item.reason ? '#37474f' : '#9e9e9e',
@@ -459,8 +421,6 @@ export default function CVEConfig() {
                         WebkitLineClamp: 3,
                         WebkitBoxOrient: 'vertical',
                         lineHeight: 1.45,
-                        cursor: isAdmin ? 'pointer' : 'default',
-                        '&:hover': isAdmin ? { color: '#e65100' } : undefined,
                       }}
                     >
                       {reason}
@@ -480,13 +440,6 @@ export default function CVEConfig() {
                         />
                       </Stack>
                       <Stack direction="row" spacing={0} onClick={(e) => e.stopPropagation()}>
-                        {isAdmin && (
-                          <Tooltip title="사유 수정">
-                            <IconButton size="small" onClick={(e) => openReasonEdit(item, e)}>
-                              <Edit fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        )}
                         {isNew && (
                           <Tooltip title="신규 확인">
                             <IconButton size="small" color="error" onClick={(e) => handleAck(item.cve, e)}>
@@ -617,47 +570,6 @@ export default function CVEConfig() {
               : parseCveList(newCVE).length > 1
                 ? `${parseCveList(newCVE).length}개 일괄 추가`
                 : '추가'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog
-        open={reasonDialog}
-        onClose={() => !savingReason && setReasonDialog(false)}
-        maxWidth="sm"
-        fullWidth
-        PaperProps={{ sx: { borderRadius: 2 } }}
-      >
-        <DialogTitle sx={{ fontFamily: font, fontWeight: 700 }}>
-          모니터링 사유 수정 — {reasonTarget?.cve}
-        </DialogTitle>
-        <DialogContent>
-          <TextField
-            autoFocus
-            label="주의모니터링 사유"
-            value={editReason}
-            disabled={savingReason}
-            onChange={(e) => setEditReason(e.target.value)}
-            fullWidth
-            required
-            multiline
-            minRows={3}
-            inputProps={{ maxLength: 500 }}
-            helperText={`${editReason.length}/500`}
-            sx={{ mt: 1, '& .MuiInputBase-input': { fontFamily: font } }}
-          />
-        </DialogContent>
-        <DialogActions sx={{ p: 2 }}>
-          <Button disabled={savingReason} onClick={() => setReasonDialog(false)} sx={{ fontFamily: font }}>
-            취소
-          </Button>
-          <Button
-            variant="contained"
-            disabled={savingReason || !editReason.trim()}
-            onClick={handleSaveReason}
-            sx={{ fontFamily: font, fontWeight: 700, bgcolor: '#e65100', '&:hover': { bgcolor: '#bf360c' } }}
-          >
-            {savingReason ? '저장 중…' : '저장'}
           </Button>
         </DialogActions>
       </Dialog>
