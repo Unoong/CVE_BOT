@@ -3054,9 +3054,12 @@ app.get('/api/monitored-cves', authenticateToken, async (req, res) => {
             items.push({
                 cve: cveCode,
                 limit: Number(limits[cveCode]) || MONITOR_DEFAULT_LIMIT,
+                reason: meta[cveCode]?.reason || '',
                 added_at: meta[cveCode]?.added_at || null,
                 last_seen_at: lastSeen,
                 has_cve_info: !!info,
+                severity: info?.CVSS_Serverity || null,
+                cvss_score: info?.CVSS_Score || null,
                 cve_info: info || null,
                 poc_count: Number(pocStats?.poc_count || 0),
                 ai_count: Number(pocStats?.ai_count || 0),
@@ -3092,10 +3095,17 @@ app.post('/api/monitored-cves', authenticateToken, checkRole(['admin']), async (
     try {
         const raw = String(req.body?.cve || '').trim().toUpperCase();
         const limit = Number(req.body?.limit ?? MONITOR_DEFAULT_LIMIT);
+        const reason = String(req.body?.reason || '').trim();
         const doCollect = req.body?.collect !== false;
 
         if (!MONITOR_CVE_RE.test(raw)) {
             return res.status(400).json({ error: '올바른 CVE 형식을 입력하세요 (예: CVE-2025-1234)' });
+        }
+        if (!reason) {
+            return res.status(400).json({ error: '주의모니터링 사유를 입력해주세요' });
+        }
+        if (reason.length > 500) {
+            return res.status(400).json({ error: '모니터링 사유는 500자 이하여야 합니다' });
         }
         if (!Number.isFinite(limit) || limit < 1) {
             return res.status(400).json({ error: '수집 한도는 1 이상이어야 합니다' });
@@ -3110,10 +3120,14 @@ app.post('/api/monitored-cves', authenticateToken, checkRole(['admin']), async (
             config.collection.cve_monitor_meta[raw] = {
                 added_at: now,
                 last_seen_at: now,
+                reason,
             };
-        } else if (!already) {
-            config.collection.cve_monitor_meta[raw].added_at = now;
-            config.collection.cve_monitor_meta[raw].last_seen_at = now;
+        } else {
+            config.collection.cve_monitor_meta[raw].reason = reason;
+            if (!already) {
+                config.collection.cve_monitor_meta[raw].added_at = now;
+                config.collection.cve_monitor_meta[raw].last_seen_at = now;
+            }
         }
         await writeAppConfig(config);
 
@@ -3189,23 +3203,45 @@ app.post('/api/monitored-cves/:cve/ack', authenticateToken, async (req, res) => 
 app.put('/api/monitored-cves/:cve', authenticateToken, checkRole(['admin']), async (req, res) => {
     try {
         const cve = String(req.params.cve || '').trim().toUpperCase();
-        const limit = Number(req.body?.limit);
+        const limit = req.body?.limit !== undefined ? Number(req.body.limit) : undefined;
+        const reason = req.body?.reason !== undefined ? String(req.body.reason).trim() : undefined;
         if (!MONITOR_CVE_RE.test(cve)) {
             return res.status(400).json({ error: '잘못된 CVE 형식' });
-        }
-        if (!Number.isFinite(limit) || limit < 1) {
-            return res.status(400).json({ error: '수집 한도는 1 이상이어야 합니다' });
         }
         const config = ensureMonitorMeta(await readAppConfig());
         if (!config.collection.cve_specific_limits[cve]) {
             return res.status(404).json({ error: '모니터링 목록에 없는 CVE입니다' });
         }
-        config.collection.cve_specific_limits[cve] = limit;
+        if (limit !== undefined) {
+            if (!Number.isFinite(limit) || limit < 1) {
+                return res.status(400).json({ error: '수집 한도는 1 이상이어야 합니다' });
+            }
+            config.collection.cve_specific_limits[cve] = limit;
+        }
+        if (reason !== undefined) {
+            if (!reason) {
+                return res.status(400).json({ error: '주의모니터링 사유를 입력해주세요' });
+            }
+            if (reason.length > 500) {
+                return res.status(400).json({ error: '모니터링 사유는 500자 이하여야 합니다' });
+            }
+            if (!config.collection.cve_monitor_meta[cve]) {
+                const now = nowLocalDateTime();
+                config.collection.cve_monitor_meta[cve] = { added_at: now, last_seen_at: now, reason };
+            } else {
+                config.collection.cve_monitor_meta[cve].reason = reason;
+            }
+        }
         await writeAppConfig(config);
-        res.json({ message: '수집 한도가 저장되었습니다', cve, limit });
+        res.json({
+            message: '모니터링 설정이 저장되었습니다',
+            cve,
+            limit: config.collection.cve_specific_limits[cve],
+            reason: config.collection.cve_monitor_meta[cve]?.reason || '',
+        });
     } catch (err) {
         console.error('[monitored-cves PUT]', err);
-        res.status(500).json({ error: '한도 수정 실패' });
+        res.status(500).json({ error: '모니터링 설정 수정 실패' });
     }
 });
 
