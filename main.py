@@ -6,6 +6,7 @@ import json
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 
 from logger import setup_logger, log_print
 from db_manager import (get_db_connection, create_table, create_cve_info_table,
@@ -39,13 +40,35 @@ def load_config(config_path=None):
 def save_config(config, config_path='config.json'):
     """
     설정 파일 저장
-    
-    Args:
-        config: 설정 딕셔너리
-        config_path: 설정 파일 경로
+
+    수집 중 웹에서 모니터링 CVE를 추가해도 덮어쓰지 않도록,
+    저장 직전 디스크의 cve_specific_limits / cve_monitor_meta 를 병합한다.
     """
     try:
-        with open(config_path, 'w', encoding='utf-8') as f:
+        path = Path(config_path) if not isinstance(config_path, Path) else config_path
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parent / path
+
+        # 동시 갱신 보호: 디스크의 모니터링 목록을 우선 유지
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                disk = json.load(f)
+            disk_collection = disk.get('collection') or {}
+            if 'collection' not in config or config['collection'] is None:
+                config['collection'] = {}
+            if 'cve_specific_limits' in disk_collection:
+                config['collection']['cve_specific_limits'] = disk_collection['cve_specific_limits']
+            if 'cve_monitor_meta' in disk_collection:
+                config['collection']['cve_monitor_meta'] = disk_collection['cve_monitor_meta']
+            # 기본 한도 등 웹에서 바꿀 수 있는 값도 디스크 우선
+            if 'max_cve_per_item' in disk_collection:
+                config['collection']['max_cve_per_item'] = disk_collection['max_cve_per_item']
+        except FileNotFoundError:
+            pass
+        except Exception as merge_err:
+            log_print(f"[설정] 디스크 병합 경고(계속 저장): {merge_err}", 'warning')
+
+        with open(path, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=4, ensure_ascii=False)
         log_print("[설정] 설정 파일 저장 성공", 'debug')
     except Exception as e:
