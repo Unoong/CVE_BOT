@@ -41,9 +41,16 @@ function severityColor(sev) {
   return '#78909c';
 }
 
+function formatCvssScore(score) {
+  if (score === null || score === undefined || score === '') return null;
+  const n = Number(score);
+  if (!Number.isFinite(n)) return String(score);
+  return String(Math.round(n * 10) / 10);
+}
+
 function MonitorCard({ item, isAdmin, onOpen, onAck, onDelete }) {
   const severity = item.severity || item.cve_info?.CVSS_Serverity || null;
-  const score = item.cvss_score || item.cve_info?.CVSS_Score || null;
+  const score = formatCvssScore(item.cvss_score || item.cve_info?.CVSS_Score);
   const isNew = !!item.has_new_poc;
   const reason = item.reason || '사유 미등록';
 
