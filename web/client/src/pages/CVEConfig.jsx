@@ -7,7 +7,7 @@ import {
 } from '@mui/material';
 import {
   Add, Delete, Warning, Info, Refresh, OpenInNew, DoneAll,
-  NewReleases, Storage, Save
+  NewReleases
 } from '@mui/icons-material';
 import axios from 'axios';
 import { API_URL } from '../config';
@@ -41,10 +41,156 @@ function severityColor(sev) {
   return '#78909c';
 }
 
+function MonitorCard({ item, isAdmin, onOpen, onAck, onDelete }) {
+  const severity = item.severity || item.cve_info?.CVSS_Serverity || null;
+  const score = item.cvss_score || item.cve_info?.CVSS_Score || null;
+  const isNew = !!item.has_new_poc;
+  const reason = item.reason || '사유 미등록';
+
+  return (
+    <Card
+      elevation={isNew ? 3 : 1}
+      onClick={() => onOpen(item.cve)}
+      sx={{
+        height: CARD_HEIGHT,
+        cursor: 'pointer',
+        borderRadius: 2,
+        border: isNew ? '2px solid #c62828' : '1px solid #e0e0e0',
+        background: isNew ? '#fff' : '#fff',
+        display: 'flex',
+        flexDirection: 'column',
+        position: 'relative',
+        overflow: 'hidden',
+        '&:hover': { boxShadow: 4 },
+      }}
+    >
+      {isNew && (
+        <Chip
+          icon={<NewReleases />}
+          label={`NEW ${item.new_poc_count}`}
+          color="error"
+          size="small"
+          sx={{
+            position: 'absolute',
+            top: 10,
+            right: 10,
+            fontWeight: 800,
+            fontFamily: font,
+            zIndex: 1,
+          }}
+        />
+      )}
+      <CardContent
+        sx={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1,
+          p: 2,
+          '&:last-child': { pb: 2 },
+          minHeight: 0,
+        }}
+      >
+        <Typography
+          sx={{
+            fontFamily: 'ui-monospace, Consolas, monospace',
+            fontWeight: 800,
+            fontSize: '1.05rem',
+            pr: isNew ? 9 : 0,
+            lineHeight: 1.3,
+          }}
+        >
+          {item.cve}
+        </Typography>
+
+        <Box>
+          {severity ? (
+            <Chip
+              size="small"
+              label={`${severity}${score ? ` ${score}` : ''}`}
+              sx={{
+                bgcolor: severityColor(severity),
+                color: '#fff',
+                fontWeight: 700,
+                fontFamily: font,
+              }}
+            />
+          ) : (
+            <Chip size="small" label="심각도 없음" variant="outlined" sx={{ fontFamily: font }} />
+          )}
+        </Box>
+
+        <Typography
+          variant="body2"
+          title={reason}
+          sx={{
+            fontFamily: font,
+            color: item.reason ? '#37474f' : '#9e9e9e',
+            flex: 1,
+            minHeight: 0,
+            overflow: 'hidden',
+            display: '-webkit-box',
+            WebkitLineClamp: 3,
+            WebkitBoxOrient: 'vertical',
+            lineHeight: 1.45,
+          }}
+        >
+          {reason}
+        </Typography>
+
+        <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+          <Stack direction="row" spacing={1}>
+            <Chip size="small" label={`PoC ${item.poc_count}`} sx={{ fontFamily: font, fontWeight: 600 }} />
+            <Chip size="small" label={`AI ${item.ai_count}`} sx={{ fontFamily: font, fontWeight: 600 }} />
+          </Stack>
+          <Stack direction="row" spacing={0} onClick={(e) => e.stopPropagation()}>
+            {isNew && (
+              <Tooltip title="신규 확인">
+                <IconButton size="small" color="error" onClick={(e) => onAck(item.cve, e)}>
+                  <DoneAll fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+            <Tooltip title="상세">
+              <IconButton size="small" onClick={() => onOpen(item.cve)}>
+                <OpenInNew fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            {isAdmin && (
+              <Tooltip title="모니터링 해제">
+                <IconButton size="small" color="error" onClick={() => onDelete(item.cve)}>
+                  <Delete fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+          </Stack>
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CardGrid({ items, isAdmin, onOpen, onAck, onDelete }) {
+  return (
+    <Grid container spacing={2}>
+      {items.map((item) => (
+        <Grid item xs={12} sm={6} md={4} lg={3} key={item.cve}>
+          <MonitorCard
+            item={item}
+            isAdmin={isAdmin}
+            onOpen={onOpen}
+            onAck={onAck}
+            onDelete={onDelete}
+          />
+        </Grid>
+      ))}
+    </Grid>
+  );
+}
+
 export default function CVEConfig() {
   const navigate = useNavigate();
   const [items, setItems] = useState([]);
-  const [defaultLimit, setDefaultLimit] = useState(5);
   const [monitorDefaultLimit, setMonitorDefaultLimit] = useState(20);
   const [isAdmin, setIsAdmin] = useState(false);
   const [totalNew, setTotalNew] = useState(0);
@@ -58,7 +204,6 @@ export default function CVEConfig() {
   const [newReason, setNewReason] = useState('');
   const [adding, setAdding] = useState(false);
   const [addResult, setAddResult] = useState(null);
-  const [savingDefault, setSavingDefault] = useState(false);
 
   const token = () => localStorage.getItem('token');
 
@@ -70,7 +215,6 @@ export default function CVEConfig() {
         headers: { Authorization: `Bearer ${token()}` },
       });
       setItems(res.data.items || []);
-      setDefaultLimit(res.data.defaultLimit ?? 5);
       setMonitorDefaultLimit(res.data.monitorDefaultLimit ?? 20);
       setIsAdmin(!!res.data.isAdmin);
       setTotalNew(Number(res.data.total_new_pocs || 0));
@@ -87,25 +231,6 @@ export default function CVEConfig() {
     const t = setInterval(loadList, 60000);
     return () => clearInterval(t);
   }, []);
-
-  const handleSaveDefaultLimit = async () => {
-    setSavingDefault(true);
-    setError('');
-    setSuccess('');
-    try {
-      await axios.put(
-        `${API_URL}/admin/cve-limits`,
-        { defaultLimit },
-        { headers: { Authorization: `Bearer ${token()}` } }
-      );
-      setSuccess('기본 수집 한도가 저장되었습니다');
-      setTimeout(() => setSuccess(''), 3000);
-    } catch (err) {
-      setError(err.response?.data?.error || '기본 한도 저장 실패');
-    } finally {
-      setSavingDefault(false);
-    }
-  };
 
   const handleAddCVE = async () => {
     const cves = parseCveList(newCVE);
@@ -189,6 +314,7 @@ export default function CVEConfig() {
 
   const openDetail = (cve) => navigate(`/cve/${cve}`);
   const newItems = useMemo(() => items.filter((i) => i.has_new_poc), [items]);
+  const restItems = useMemo(() => items.filter((i) => !i.has_new_poc), [items]);
 
   if (loading && items.length === 0) {
     return (
@@ -274,51 +400,6 @@ export default function CVEConfig() {
         </Alert>
       )}
 
-      <Card sx={{ mb: 3, borderRadius: 2, border: '1px solid #e0e0e0' }}>
-        <CardContent>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }} justifyContent="space-between">
-            <Box>
-              <Typography variant="h6" sx={{ fontWeight: 700, fontFamily: font }}>
-                <Storage sx={{ mr: 1, verticalAlign: 'middle', color: '#e65100' }} />
-                일반 CVE 기본 PoC 수집 한도
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: font }}>
-                모니터링 미등록 CVE는 이 기본값을 사용합니다
-              </Typography>
-            </Box>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <TextField
-                type="number"
-                size="small"
-                label="기본 한도"
-                value={defaultLimit}
-                disabled={!isAdmin}
-                onChange={(e) => setDefaultLimit(parseInt(e.target.value, 10) || 5)}
-                inputProps={{ min: 1 }}
-                sx={{ width: 140 }}
-              />
-              {isAdmin && (
-                <Button
-                  variant="contained"
-                  startIcon={<Save />}
-                  disabled={savingDefault}
-                  onClick={handleSaveDefaultLimit}
-                  sx={{ fontFamily: font, bgcolor: '#455a64' }}
-                >
-                  저장
-                </Button>
-              )}
-            </Stack>
-          </Stack>
-        </CardContent>
-      </Card>
-
-      {newItems.length > 0 && (
-        <Alert severity="warning" icon={<NewReleases />} sx={{ mb: 2, fontFamily: font, fontWeight: 600 }}>
-          신규 PoC가 수집된 모니터링 CVE {newItems.length}건 — 「신규 확인」으로 배지를 해제할 수 있습니다.
-        </Alert>
-      )}
-
       {items.length === 0 ? (
         <Paper sx={{ py: 8, textAlign: 'center', borderRadius: 2 }}>
           <Warning sx={{ fontSize: 56, color: '#bdbdbd', mb: 1 }} />
@@ -327,146 +408,78 @@ export default function CVEConfig() {
           </Typography>
         </Paper>
       ) : (
-        <Grid container spacing={2}>
-          {items.map((item) => {
-            const severity = item.severity || item.cve_info?.CVSS_Serverity || null;
-            const score = item.cvss_score || item.cve_info?.CVSS_Score || null;
-            const isNew = !!item.has_new_poc;
-            const reason = item.reason || '사유 미등록';
+        <>
+          {newItems.length > 0 && (
+            <Paper
+              elevation={0}
+              sx={{
+                mb: 4,
+                p: 2.5,
+                borderRadius: 2,
+                border: '2px solid #c62828',
+                bgcolor: '#fff5f5',
+                boxShadow: '0 0 0 4px rgba(198, 40, 40, 0.08)',
+              }}
+            >
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                spacing={1}
+                alignItems={{ sm: 'center' }}
+                justifyContent="space-between"
+                sx={{ mb: 2 }}
+              >
+                <Stack direction="row" spacing={1.5} alignItems="center">
+                  <NewReleases sx={{ color: '#c62828', fontSize: 28 }} />
+                  <Box>
+                    <Typography sx={{ fontFamily: font, fontWeight: 800, color: '#b71c1c', fontSize: '1.1rem' }}>
+                      신규 수집 PoC
+                    </Typography>
+                    <Typography variant="body2" sx={{ fontFamily: font, color: '#c62828' }}>
+                      확인 후 「신규 확인」을 누르면 아래 일반 목록으로 이동합니다
+                    </Typography>
+                  </Box>
+                </Stack>
+                <Chip
+                  label={`${newItems.length}개 CVE · PoC ${totalNew}건`}
+                  color="error"
+                  sx={{ fontFamily: font, fontWeight: 700 }}
+                />
+              </Stack>
+              <CardGrid
+                items={newItems}
+                isAdmin={isAdmin}
+                onOpen={openDetail}
+                onAck={handleAck}
+                onDelete={handleDelete}
+              />
+            </Paper>
+          )}
 
-            return (
-              <Grid item xs={12} sm={6} md={4} lg={3} key={item.cve}>
-                <Card
-                  elevation={isNew ? 4 : 1}
-                  onClick={() => openDetail(item.cve)}
+          {restItems.length > 0 && (
+            <Box sx={{ mt: newItems.length > 0 ? 1 : 0 }}>
+              {newItems.length > 0 && (
+                <Typography
                   sx={{
-                    height: CARD_HEIGHT,
-                    cursor: 'pointer',
-                    borderRadius: 2,
-                    border: isNew ? '2px solid #d32f2f' : '1px solid #e0e0e0',
-                    background: isNew ? '#fff8f8' : '#fff',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    position: 'relative',
-                    overflow: 'hidden',
-                    '&:hover': { boxShadow: 4 },
+                    fontFamily: font,
+                    fontWeight: 700,
+                    color: '#546e7a',
+                    mb: 2,
+                    fontSize: '0.95rem',
                   }}
                 >
-                  {isNew && (
-                    <Chip
-                      icon={<NewReleases />}
-                      label={`NEW ${item.new_poc_count}`}
-                      color="error"
-                      size="small"
-                      sx={{
-                        position: 'absolute',
-                        top: 10,
-                        right: 10,
-                        fontWeight: 800,
-                        fontFamily: font,
-                        zIndex: 1,
-                      }}
-                    />
-                  )}
-                  <CardContent
-                    sx={{
-                      flex: 1,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 1,
-                      p: 2,
-                      '&:last-child': { pb: 2 },
-                      minHeight: 0,
-                    }}
-                  >
-                    <Typography
-                      sx={{
-                        fontFamily: 'ui-monospace, Consolas, monospace',
-                        fontWeight: 800,
-                        fontSize: '1.05rem',
-                        pr: isNew ? 9 : 0,
-                        lineHeight: 1.3,
-                      }}
-                    >
-                      {item.cve}
-                    </Typography>
-
-                    <Box>
-                      {severity ? (
-                        <Chip
-                          size="small"
-                          label={`${severity}${score ? ` ${score}` : ''}`}
-                          sx={{
-                            bgcolor: severityColor(severity),
-                            color: '#fff',
-                            fontWeight: 700,
-                            fontFamily: font,
-                          }}
-                        />
-                      ) : (
-                        <Chip size="small" label="심각도 없음" variant="outlined" sx={{ fontFamily: font }} />
-                      )}
-                    </Box>
-
-                    <Typography
-                      variant="body2"
-                      title={reason}
-                      sx={{
-                        fontFamily: font,
-                        color: item.reason ? '#37474f' : '#9e9e9e',
-                        flex: 1,
-                        minHeight: 0,
-                        overflow: 'hidden',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 3,
-                        WebkitBoxOrient: 'vertical',
-                        lineHeight: 1.45,
-                      }}
-                    >
-                      {reason}
-                    </Typography>
-
-                    <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                      <Stack direction="row" spacing={1}>
-                        <Chip
-                          size="small"
-                          label={`PoC ${item.poc_count}`}
-                          sx={{ fontFamily: font, fontWeight: 600 }}
-                        />
-                        <Chip
-                          size="small"
-                          label={`AI ${item.ai_count}`}
-                          sx={{ fontFamily: font, fontWeight: 600 }}
-                        />
-                      </Stack>
-                      <Stack direction="row" spacing={0} onClick={(e) => e.stopPropagation()}>
-                        {isNew && (
-                          <Tooltip title="신규 확인">
-                            <IconButton size="small" color="error" onClick={(e) => handleAck(item.cve, e)}>
-                              <DoneAll fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                        <Tooltip title="상세">
-                          <IconButton size="small" onClick={() => openDetail(item.cve)}>
-                            <OpenInNew fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                        {isAdmin && (
-                          <Tooltip title="모니터링 해제">
-                            <IconButton size="small" color="error" onClick={() => handleDelete(item.cve)}>
-                              <Delete fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                      </Stack>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              </Grid>
-            );
-          })}
-        </Grid>
+                  일반 모니터링 ({restItems.length})
+                </Typography>
+              )}
+              <CardGrid
+                items={restItems}
+                isAdmin={isAdmin}
+                onOpen={openDetail}
+                onAck={handleAck}
+                onDelete={handleDelete}
+              />
+            </Box>
+          )}
+        </>
       )}
 
       <Dialog
