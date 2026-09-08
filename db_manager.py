@@ -256,6 +256,43 @@ def insert_cve_info(conn, cve_info):
                 pass
 
 
+def update_cve_info_descriptions(conn, cve_code, descriptions, solutions=None):
+    """
+    CVE_Info.descriptions (및 선택적 solutions) 갱신
+    """
+    try:
+        cursor = conn.cursor()
+        if solutions is not None:
+            cursor.execute(
+                """
+                UPDATE CVE_Info
+                SET descriptions = %s, solutions = %s
+                WHERE CVE_Code = %s
+                """,
+                (descriptions, solutions, cve_code),
+            )
+        else:
+            cursor.execute(
+                """
+                UPDATE CVE_Info
+                SET descriptions = %s
+                WHERE CVE_Code = %s
+                """,
+                (descriptions, cve_code),
+            )
+        conn.commit()
+        affected = cursor.rowcount
+        cursor.close()
+        # mysql connector는 값 동일/드라이버 설정에 따라 0을 줄 수 있음 → 예외 없으면 성공 처리
+        if affected == 0:
+            log_print(f"[DB CVE_Info 설명 갱신] rowcount=0 ({cve_code}) — 커밋은 완료", "warning")
+        return True
+    except Error as e:
+        log_print(f"[DB CVE_Info 설명 갱신 오류] {e}", "error")
+        conn.rollback()
+        return False
+
+
 def get_cve_count(conn, cve_code):
     """
     특정 CVE 코드의 저장된 개수 조회
@@ -402,6 +439,8 @@ def create_ai_analysis_table(conn):
 def get_unanalyzed_cves(conn):
     """
     AI_chk가 'N'인 CVE 목록 조회
+
+    다운로드 실패 건은 분석 대상에서 제외한다.
     
     Args:
         conn: 데이터베이스 연결 객체
@@ -415,8 +454,9 @@ def get_unanalyzed_cves(conn):
             SELECT id, link, download_path, cve, title
             FROM Github_CVE_Info
             WHERE AI_chk = 'N'
+              AND (download_path IS NULL OR download_path <> %s)
             ORDER BY id ASC
-        """)
+        """, ('다운로드 실패',))
         results = cursor.fetchall()
         cursor.close()
         return results
