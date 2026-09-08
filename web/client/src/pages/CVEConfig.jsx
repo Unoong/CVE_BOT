@@ -472,10 +472,10 @@ export default function CVEConfig() {
           {restItems.length > 0 && (
             <Box sx={{ mt: newItems.length > 0 ? 1 : 0 }}>
               <Stack
-                direction={{ xs: 'column', sm: 'row' }}
-                spacing={1}
-                alignItems={{ sm: 'center' }}
-                justifyContent="space-between"
+                direction="row"
+                spacing={1.5}
+                alignItems="center"
+                flexWrap="wrap"
                 sx={{ mb: 2 }}
               >
                 <Typography
