@@ -213,6 +213,7 @@ export default function CVEConfig() {
   const [addResult, setAddResult] = useState(null);
   const [onlyWithPoc, setOnlyWithPoc] = useState(false);
   const [cveQuery, setCveQuery] = useState('');
+  const [reasonQuery, setReasonQuery] = useState('');
 
   const token = () => localStorage.getItem('token');
 
@@ -326,12 +327,14 @@ export default function CVEConfig() {
   const restItems = useMemo(() => items.filter((i) => !i.has_new_poc), [items]);
   const visibleRestItems = useMemo(() => {
     const q = cveQuery.trim().toUpperCase();
+    const rq = reasonQuery.trim().toLowerCase();
     return restItems.filter((i) => {
       if (onlyWithPoc && !(Number(i.poc_count) > 0)) return false;
       if (q && !String(i.cve || '').toUpperCase().includes(q)) return false;
+      if (rq && !String(i.reason || '').toLowerCase().includes(rq)) return false;
       return true;
     });
-  }, [restItems, onlyWithPoc, cveQuery]);
+  }, [restItems, onlyWithPoc, cveQuery, reasonQuery]);
 
   if (loading && items.length === 0) {
     return (
@@ -527,11 +530,29 @@ export default function CVEConfig() {
                     ),
                   }}
                 />
+                <TextField
+                  size="small"
+                  placeholder="사유 검색"
+                  value={reasonQuery}
+                  onChange={(e) => setReasonQuery(e.target.value)}
+                  sx={{
+                    width: { xs: '100%', sm: 220 },
+                    bgcolor: '#fff',
+                    '& .MuiInputBase-input': { fontFamily: font },
+                  }}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Search fontSize="small" sx={{ color: '#78909c' }} />
+                      </InputAdornment>
+                    ),
+                  }}
+                />
               </Stack>
               {visibleRestItems.length === 0 ? (
                 <Paper sx={{ py: 4, textAlign: 'center', borderRadius: 2, border: '1px dashed #cfd8dc' }}>
                   <Typography sx={{ fontFamily: font, color: 'text.secondary' }}>
-                    {cveQuery.trim()
+                    {cveQuery.trim() || reasonQuery.trim()
                       ? '검색 조건에 맞는 CVE가 없습니다'
                       : onlyWithPoc
                         ? 'PoC가 수집된 일반 모니터링 CVE가 없습니다'
