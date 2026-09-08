@@ -3,11 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Card, CardContent, Button, TextField,
   Dialog, DialogTitle, DialogContent, DialogActions, Alert, Chip,
-  Grid, CircularProgress, IconButton, Tooltip, Stack, Paper
+  Grid, CircularProgress, IconButton, Tooltip, Stack, Paper, InputAdornment
 } from '@mui/material';
 import {
   Add, Delete, Warning, Info, Refresh, OpenInNew, DoneAll,
-  NewReleases, FilterList
+  NewReleases, FilterList, Search
 } from '@mui/icons-material';
 import axios from 'axios';
 import { API_URL } from '../config';
@@ -212,6 +212,7 @@ export default function CVEConfig() {
   const [adding, setAdding] = useState(false);
   const [addResult, setAddResult] = useState(null);
   const [onlyWithPoc, setOnlyWithPoc] = useState(false);
+  const [cveQuery, setCveQuery] = useState('');
 
   const token = () => localStorage.getItem('token');
 
@@ -323,10 +324,14 @@ export default function CVEConfig() {
   const openDetail = (cve) => navigate(`/cve/${cve}`);
   const newItems = useMemo(() => items.filter((i) => i.has_new_poc), [items]);
   const restItems = useMemo(() => items.filter((i) => !i.has_new_poc), [items]);
-  const visibleRestItems = useMemo(
-    () => (onlyWithPoc ? restItems.filter((i) => Number(i.poc_count) > 0) : restItems),
-    [restItems, onlyWithPoc]
-  );
+  const visibleRestItems = useMemo(() => {
+    const q = cveQuery.trim().toUpperCase();
+    return restItems.filter((i) => {
+      if (onlyWithPoc && !(Number(i.poc_count) > 0)) return false;
+      if (q && !String(i.cve || '').toUpperCase().includes(q)) return false;
+      return true;
+    });
+  }, [restItems, onlyWithPoc, cveQuery]);
 
   if (loading && items.length === 0) {
     return (
@@ -504,11 +509,33 @@ export default function CVEConfig() {
                 >
                   {onlyWithPoc ? 'PoC 있는 것만 보는 중' : 'PoC 있는 것만 보기'}
                 </Button>
+                <TextField
+                  size="small"
+                  placeholder="CVE 검색"
+                  value={cveQuery}
+                  onChange={(e) => setCveQuery(e.target.value.toUpperCase())}
+                  sx={{
+                    width: { xs: '100%', sm: 200 },
+                    bgcolor: '#fff',
+                    '& .MuiInputBase-input': { fontFamily: 'ui-monospace, Consolas, monospace', fontWeight: 600 },
+                  }}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Search fontSize="small" sx={{ color: '#78909c' }} />
+                      </InputAdornment>
+                    ),
+                  }}
+                />
               </Stack>
               {visibleRestItems.length === 0 ? (
                 <Paper sx={{ py: 4, textAlign: 'center', borderRadius: 2, border: '1px dashed #cfd8dc' }}>
                   <Typography sx={{ fontFamily: font, color: 'text.secondary' }}>
-                    PoC가 수집된 일반 모니터링 CVE가 없습니다
+                    {cveQuery.trim()
+                      ? '검색 조건에 맞는 CVE가 없습니다'
+                      : onlyWithPoc
+                        ? 'PoC가 수집된 일반 모니터링 CVE가 없습니다'
+                        : '표시할 CVE가 없습니다'}
                   </Typography>
                 </Paper>
               ) : (
