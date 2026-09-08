@@ -7,7 +7,7 @@ import {
 } from '@mui/material';
 import {
   Add, Delete, Warning, Info, Refresh, OpenInNew, DoneAll,
-  NewReleases
+  NewReleases, FilterList
 } from '@mui/icons-material';
 import axios from 'axios';
 import { API_URL } from '../config';
@@ -211,6 +211,7 @@ export default function CVEConfig() {
   const [newReason, setNewReason] = useState('');
   const [adding, setAdding] = useState(false);
   const [addResult, setAddResult] = useState(null);
+  const [onlyWithPoc, setOnlyWithPoc] = useState(false);
 
   const token = () => localStorage.getItem('token');
 
@@ -322,6 +323,10 @@ export default function CVEConfig() {
   const openDetail = (cve) => navigate(`/cve/${cve}`);
   const newItems = useMemo(() => items.filter((i) => i.has_new_poc), [items]);
   const restItems = useMemo(() => items.filter((i) => !i.has_new_poc), [items]);
+  const visibleRestItems = useMemo(
+    () => (onlyWithPoc ? restItems.filter((i) => Number(i.poc_count) > 0) : restItems),
+    [restItems, onlyWithPoc]
+  );
 
   if (loading && items.length === 0) {
     return (
@@ -466,26 +471,55 @@ export default function CVEConfig() {
 
           {restItems.length > 0 && (
             <Box sx={{ mt: newItems.length > 0 ? 1 : 0 }}>
-              {newItems.length > 0 && (
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                spacing={1}
+                alignItems={{ sm: 'center' }}
+                justifyContent="space-between"
+                sx={{ mb: 2 }}
+              >
                 <Typography
                   sx={{
                     fontFamily: font,
                     fontWeight: 700,
                     color: '#546e7a',
-                    mb: 2,
                     fontSize: '0.95rem',
                   }}
                 >
-                  일반 모니터링 ({restItems.length})
+                  일반 모니터링 ({visibleRestItems.length}
+                  {onlyWithPoc ? ` / ${restItems.length}` : ''})
                 </Typography>
+                <Button
+                  size="small"
+                  variant={onlyWithPoc ? 'contained' : 'outlined'}
+                  startIcon={<FilterList />}
+                  onClick={() => setOnlyWithPoc((v) => !v)}
+                  sx={{
+                    fontFamily: font,
+                    fontWeight: 700,
+                    ...(onlyWithPoc
+                      ? { bgcolor: '#455a64', '&:hover': { bgcolor: '#37474f' } }
+                      : { borderColor: '#90a4ae', color: '#455a64' }),
+                  }}
+                >
+                  {onlyWithPoc ? 'PoC 있는 것만 보는 중' : 'PoC 있는 것만 보기'}
+                </Button>
+              </Stack>
+              {visibleRestItems.length === 0 ? (
+                <Paper sx={{ py: 4, textAlign: 'center', borderRadius: 2, border: '1px dashed #cfd8dc' }}>
+                  <Typography sx={{ fontFamily: font, color: 'text.secondary' }}>
+                    PoC가 수집된 일반 모니터링 CVE가 없습니다
+                  </Typography>
+                </Paper>
+              ) : (
+                <CardGrid
+                  items={visibleRestItems}
+                  isAdmin={isAdmin}
+                  onOpen={openDetail}
+                  onAck={handleAck}
+                  onDelete={handleDelete}
+                />
               )}
-              <CardGrid
-                items={restItems}
-                isAdmin={isAdmin}
-                onOpen={openDetail}
-                onAck={handleAck}
-                onDelete={handleDelete}
-              />
             </Box>
           )}
         </>
