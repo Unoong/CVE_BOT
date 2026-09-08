@@ -435,7 +435,9 @@ export default function CVEConfig() {
                       신규 수집 PoC
                     </Typography>
                     <Typography variant="body2" sx={{ fontFamily: font, color: '#c62828' }}>
-                      확인 후 「신규 확인」을 누르면 아래 일반 목록으로 이동합니다
+                      기준: 마지막 「신규 확인」 이후 수집된 PoC가 있는 CVE
+                      {' · '}
+                      「신규 확인」 전까지 이 영역에 유지됩니다
                     </Typography>
                   </Box>
                 </Stack>

@@ -2987,11 +2987,12 @@ function parseCveListInput(input) {
 function upsertMonitorMeta(config, cve, { limit, reason, now }) {
     const already = Object.prototype.hasOwnProperty.call(config.collection.cve_specific_limits, cve);
     config.collection.cve_specific_limits[cve] = limit;
-    if (!config.collection.cve_monitor_meta[cve]) {
+        if (!config.collection.cve_monitor_meta[cve]) {
         config.collection.cve_monitor_meta[cve] = {
             added_at: now,
             last_seen_at: now,
             reason,
+            needs_review: false,
         };
     } else {
         config.collection.cve_monitor_meta[cve].reason = reason;
@@ -3053,16 +3054,12 @@ app.get('/api/monitored-cves', authenticateToken, async (req, res) => {
         const now = nowLocalDateTime();
         for (const cveCode of cveCodes) {
             if (!meta[cveCode]) {
-                meta[cveCode] = { added_at: now, last_seen_at: now };
+                meta[cveCode] = { added_at: now, last_seen_at: now, needs_review: false };
                 metaChanged = true;
             } else if (!meta[cveCode].last_seen_at) {
                 meta[cveCode].last_seen_at = meta[cveCode].added_at || now;
                 metaChanged = true;
             }
-        }
-        if (metaChanged) {
-            config.collection.cve_monitor_meta = meta;
-            await writeAppConfig(config);
         }
 
         const items = [];
@@ -3093,12 +3090,19 @@ app.get('/api/monitored-cves', authenticateToken, async (req, res) => {
             );
 
             const newPocCount = Number(pocStats?.new_poc_count || 0);
+            // 신규 PoC가 한 번이라도 감지되면 needs_review=true 로 고정 → 분석가 ack 전까지 유지
+            if (newPocCount > 0 && !meta[cveCode].needs_review) {
+                meta[cveCode].needs_review = true;
+                metaChanged = true;
+            }
+            const needsReview = !!meta[cveCode].needs_review || newPocCount > 0;
             items.push({
                 cve: cveCode,
                 limit: Number(limits[cveCode]) || MONITOR_DEFAULT_LIMIT,
                 reason: meta[cveCode]?.reason || '',
                 added_at: meta[cveCode]?.added_at || null,
                 last_seen_at: lastSeen,
+                needs_review: needsReview,
                 has_cve_info: !!info,
                 severity: info?.CVSS_Serverity || null,
                 cvss_score: info?.CVSS_Score || null,
@@ -3108,8 +3112,13 @@ app.get('/api/monitored-cves', authenticateToken, async (req, res) => {
                 skipped_count: Number(pocStats?.skipped_count || 0),
                 latest_poc_time: pocStats?.latest_poc_time || null,
                 new_poc_count: newPocCount,
-                has_new_poc: newPocCount > 0,
+                has_new_poc: needsReview,
             });
+        }
+
+        if (metaChanged) {
+            config.collection.cve_monitor_meta = meta;
+            await writeAppConfig(config);
         }
 
         // NEW PoC 우선 → 최근 등록순 → CVE 코드순
@@ -3167,6 +3176,13 @@ app.post('/api/monitored-cves', authenticateToken, checkRole(['admin']), async (
         try {
             const r = await runEnrichMonitoredCve(raw, { collect: doCollect });
             enrich = r.parsed;
+            if (Number(enrich?.github_collected_new || 0) > 0) {
+                const cfg2 = ensureMonitorMeta(await readAppConfig());
+                if (cfg2.collection.cve_monitor_meta[raw]) {
+                    cfg2.collection.cve_monitor_meta[raw].needs_review = true;
+                    await writeAppConfig(cfg2);
+                }
+            }
         } catch (e) {
             enrichError = e.message || String(e);
             logger.warn('[monitored-cves POST] enrich 실패:', enrichError);
@@ -3237,6 +3253,13 @@ app.post('/api/monitored-cves/batch', authenticateToken, checkRole(['admin']), a
             try {
                 const r = await runEnrichMonitoredCve(cve, { collect: doCollect });
                 enrich = r.parsed;
+                if (Number(enrich?.github_collected_new || 0) > 0) {
+                    const cfg2 = ensureMonitorMeta(await readAppConfig());
+                    if (cfg2.collection.cve_monitor_meta[cve]) {
+                        cfg2.collection.cve_monitor_meta[cve].needs_review = true;
+                        await writeAppConfig(cfg2);
+                    }
+                }
             } catch (e) {
                 enrichError = e.message || String(e);
                 logger.warn(`[monitored-cves BATCH] enrich 실패 (${cve}):`, enrichError);
@@ -3302,9 +3325,14 @@ app.post('/api/monitored-cves/:cve/ack', authenticateToken, async (req, res) => 
         }
         const now = nowLocalDateTime();
         if (!config.collection.cve_monitor_meta[cve]) {
-            config.collection.cve_monitor_meta[cve] = { added_at: now, last_seen_at: now };
+            config.collection.cve_monitor_meta[cve] = {
+                added_at: now,
+                last_seen_at: now,
+                needs_review: false,
+            };
         } else {
             config.collection.cve_monitor_meta[cve].last_seen_at = now;
+            config.collection.cve_monitor_meta[cve].needs_review = false;
         }
         await writeAppConfig(config);
         res.json({ message: '신규 PoC를 확인 처리했습니다', cve, last_seen_at: now });
